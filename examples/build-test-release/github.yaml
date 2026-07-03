@@ -1,0 +1,63 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# =============================================================================
+# EXAMPLE: Plain GitHub-native caller for the build-test-release workflow
+# =============================================================================
+# Copy this file into your project's .github/workflows/ directory (for
+# example as release.yaml) and adjust the `uses:` ref and the optional
+# `with:` overrides to suit your project.
+#
+# This is Model A: the TAG-DRIVEN release model. The version comes from a
+# validated, signed semver tag; the reusable workflow builds, tests,
+# audits, attaches artefacts to a draft GitHub release and promotes it.
+#
+# Go modules need no registry publish step: the Go module proxy serves
+# module versions straight from the repository tags. The reusable
+# workflow exposes a `tag` output and leaves the run-scoped build
+# artefacts in place, so extra caller-side jobs (stacked after the
+# `release` job below) have everything they need.
+# =============================================================================
+name: 'Build/Test/Release'
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    tags:
+      - '**'
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  release:
+    name: 'Build/Test/Release'
+    # Skip tag deletion events
+    if: "!github.event.deleted"
+    permissions:
+      contents: write       # Create the GitHub release / attach assets
+      id-token: write       # OIDC for build provenance attestations
+      attestations: write   # Build provenance attestations
+    # REPLACE the pinned SHA below with a go-workflows release SHA.
+    # The all-zero SHA is a non-functional placeholder, NOT a real commit.
+    # yamllint disable-line rule:line-length
+    uses: lfreleng-actions/go-workflows/.github/workflows/build-test-release.yaml@0000000000000000000000000000000000000000  # REPLACE: vX.Y.Z
+    # All inputs are optional. Uncomment and tune only what your project
+    # needs; everything else falls back to sensible defaults.
+    # with:
+    #   path_prefix: '.'              # project root (monorepo subdir, etc.)
+    #   go_version: ''                # explicit Go version (default go.mod)
+    #   release_goos: 'linux,darwin,windows'
+    #   release_goarch: 'amd64,arm64'
+    #   output_name: ''               # binary base name (default repo name)
+    #   attestations: true            # build provenance attestations
+    #   sigstore_sign: true           # Sigstore-sign release checksums
+
+# Go module consumers fetch releases through the module proxy straight
+# from the tag; no separate publish job is necessary. Stack extra jobs
+# after the release job (consuming `needs.release.outputs.tag`) when
+# your project needs more, e.g. container image publishing.

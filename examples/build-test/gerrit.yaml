@@ -1,0 +1,179 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# =============================================================================
+# EXAMPLE: Gerrit-wrapped caller for the reusable build-test workflow
+# =============================================================================
+# Use this form when Gerrit is the source of truth (SCM) for your project.
+# gerrit_to_platform dispatches this workflow (via the GitHub API) when a
+# patchset is created in Gerrit; it then votes Verified +/-1 on the change.
+#
+# DEPLOYMENT NOTES:
+#   * Copy into .github/workflows/ with a filename containing BOTH 'gerrit'
+#     AND 'verify' so gerrit_to_platform can discover it, e.g.
+#     gerrit-verify.yaml.
+#   * The workflow file must exist on EVERY active branch: dispatches
+#     target refs/heads/{GERRIT_BRANCH}.
+#   * The nine GERRIT_* inputs are populated automatically by the dispatcher.
+#   * GERRIT_DISABLED lets you run manually from the GitHub UI without Gerrit
+#     (the clear/vote jobs are skipped and a normal checkout is used). The
+#     release examples do NOT include GERRIT_DISABLED.
+#   * Set the repository variables GERRIT_SERVER, GERRIT_SSH_USER,
+#     GERRIT_KNOWN_HOSTS, GERRIT_URL and the secret GERRIT_SSH_PRIVKEY.
+# =============================================================================
+name: 'Gerrit Verify'
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+    inputs:
+      GERRIT_BRANCH:
+        description: 'Branch that change is against'
+        required: false
+        type: string
+        default: ''
+      GERRIT_CHANGE_ID:
+        description: 'The ID for the change'
+        required: false
+        type: string
+        default: ''
+      GERRIT_CHANGE_NUMBER:
+        description: 'The Gerrit number'
+        required: false
+        type: string
+        default: ''
+      GERRIT_CHANGE_URL:
+        description: 'URL to the change'
+        required: false
+        type: string
+        default: ''
+      GERRIT_EVENT_TYPE:
+        description: 'Type of Gerrit event'
+        required: false
+        type: string
+        default: ''
+      GERRIT_PATCHSET_NUMBER:
+        description: 'The patch number for the change'
+        required: false
+        type: string
+        default: ''
+      GERRIT_PATCHSET_REVISION:
+        description: 'The revision sha'
+        required: false
+        type: string
+        default: ''
+      GERRIT_PROJECT:
+        description: 'Project in Gerrit'
+        required: false
+        type: string
+        default: ''
+      GERRIT_REFSPEC:
+        description: 'Gerrit refspec of change'
+        required: false
+        type: string
+        default: ''
+      GERRIT_DISABLED:
+        description: 'Run without Gerrit components'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.event.inputs.GERRIT_CHANGE_ID || github.run_id }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  # Clear any previous Verified vote so the change starts from a clean state.
+  clear-vote:
+    if: inputs.GERRIT_DISABLED != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: 'Harden runner'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit
+      - name: 'Clear votes'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/gerrit-review-action@b26a98041c59f9a877048c320313ab13bcc19aae  # v1.0.1
+        with:
+          host: ${{ vars.GERRIT_SERVER }}
+          username: ${{ vars.GERRIT_SSH_USER }}
+          key: ${{ secrets.GERRIT_SSH_PRIVKEY }}
+          known_hosts: ${{ vars.GERRIT_KNOWN_HOSTS }}
+          gerrit-change-number: ${{ inputs.GERRIT_CHANGE_NUMBER }}
+          gerrit-patchset-number: ${{ inputs.GERRIT_PATCHSET_NUMBER }}
+          vote-type: clear
+      - name: 'Allow replication'
+        run: sleep 10s
+
+  # Call the reusable build-test workflow. When dispatched by Gerrit, the
+  # gerrit_* inputs drive checkout-gerrit-change-action inside the reusable
+  # workflow. For a manual GERRIT_DISABLED run, the GERRIT_* inputs are empty
+  # so the reusable workflow performs a normal checkout.
+  build-test:
+    needs: clear-vote
+    if: >-
+      always()
+      && (needs.clear-vote.result == 'success'
+          || needs.clear-vote.result == 'skipped')
+    permissions:
+      contents: read
+      pull-requests: read  # repository-metadata-action queries PR data
+    # REPLACE the pinned SHA below with a go-workflows release SHA.
+    # The all-zero SHA is a non-functional placeholder, NOT a real commit.
+    # yamllint disable-line rule:line-length
+    uses: lfreleng-actions/go-workflows/.github/workflows/build-test.yaml@0000000000000000000000000000000000000000  # REPLACE: vX.Y.Z
+    with:
+      # When GERRIT_DISABLED is true the gerrit_* values are blanked so the
+      # reusable workflow falls back to a standard checkout.
+      # yamllint disable-line rule:line-length
+      gerrit_refspec: ${{ !inputs.GERRIT_DISABLED && inputs.GERRIT_REFSPEC || '' }}
+      # yamllint disable-line rule:line-length
+      gerrit_project: ${{ !inputs.GERRIT_DISABLED && inputs.GERRIT_PROJECT || '' }}
+      # yamllint disable-line rule:line-length
+      gerrit_branch: ${{ !inputs.GERRIT_DISABLED && inputs.GERRIT_BRANCH || '' }}
+      # gerrit_url falls back to the GERRIT_URL repository variable.
+      # Optional Go inputs (uncomment to tune):
+      #   go_version_matrix: ''      # e.g. '["1.25", "1.26"]'
+      #   build_flags: ''            # extra go build flags
+      #   test_args: ''              # extra go test arguments
+      #   gosec: false               # gosec security scanner
+      #   staticcheck: false         # staticcheck analyser
+
+  # Report the overall workflow conclusion back to Gerrit as a Verified vote.
+  vote:
+    if: ${{ always() && inputs.GERRIT_DISABLED != true }}
+    needs: [clear-vote, build-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # workflow-conclusion queries the Actions API to list run jobs
+      actions: read
+    timeout-minutes: 5
+    steps:
+      - name: 'Harden runner'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit
+      - name: 'Get conclusion'
+        # yamllint disable-line rule:line-length
+        uses: im-open/workflow-conclusion@fce18569e28a9f2ed1feca1e6d4251e6a7365fdc  # v2.2.4
+      - name: 'Set vote'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/gerrit-review-action@b26a98041c59f9a877048c320313ab13bcc19aae  # v1.0.1
+        with:
+          host: ${{ vars.GERRIT_SERVER }}
+          username: ${{ vars.GERRIT_SSH_USER }}
+          key: ${{ secrets.GERRIT_SSH_PRIVKEY }}
+          known_hosts: ${{ vars.GERRIT_KNOWN_HOSTS }}
+          gerrit-change-number: ${{ inputs.GERRIT_CHANGE_NUMBER }}
+          gerrit-patchset-number: ${{ inputs.GERRIT_PATCHSET_NUMBER }}
+          vote-type: ${{ env.WORKFLOW_CONCLUSION }}

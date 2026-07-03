@@ -1,0 +1,58 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# =============================================================================
+# EXAMPLE: Plain GitHub-native caller for the reusable build-test workflow
+# =============================================================================
+# Copy this file into your project's .github/workflows/ directory (for
+# example as build-test.yaml) and adjust the `uses:` ref and the optional
+# `with:` overrides to suit your project.
+#
+# This is the GitHub-native form: it runs on pull requests, exactly like a
+# standard GitHub project. For projects where Gerrit is the source of truth,
+# use the gerrit.yaml example in this directory instead.
+# =============================================================================
+name: 'Build/Test'
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  build-test:
+    name: 'Build/Test'
+    permissions:
+      contents: read
+      pull-requests: read  # repository-metadata-action queries PR data
+    # REPLACE the pinned SHA below with a go-workflows release SHA.
+    # The all-zero SHA is a non-functional placeholder, NOT a real commit.
+    # yamllint disable-line rule:line-length
+    uses: lfreleng-actions/go-workflows/.github/workflows/build-test.yaml@0000000000000000000000000000000000000000  # REPLACE: vX.Y.Z
+    # All inputs are optional. Uncomment and tune only what your project
+    # needs; everything else falls back to sensible defaults.
+    # with:
+    #   path_prefix: '.'              # project root (monorepo subdir, etc.)
+    #   go_version_matrix: ''         # e.g. '["1.25", "1.26"]'
+    #   build_flags: ''               # extra go build flags
+    #   test_args: ''                 # extra go test arguments
+    #   coverage: true                # collect test coverage
+    #   race: true                    # Go race detector
+    #   test_permit_fail: false       # soft-fail tests
+    #   lint_permit_fail: false       # soft-fail golangci-lint
+    #   gosec: false                  # gosec security scanner
+    #   staticcheck: false            # staticcheck analyser
+    #   audit_permit_fail: false      # soft-fail dependency audit
+    #   grype_fail_on: 'medium'       # Grype severity gate
+    #   harden_runner_egress: 'block' # 'block' (default) or 'audit'

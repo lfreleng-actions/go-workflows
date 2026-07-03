@@ -1,0 +1,66 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# =============================================================================
+# EXAMPLE: Gerrit-sourced release caller for the build-test-release workflow
+# =============================================================================
+# Use this form when Gerrit is the source of truth (SCM) for your project.
+#
+# This is Model A: the TAG-DRIVEN release model. Unlike the verify
+# workflow (which gerrit_to_platform dispatches per patchset and votes
+# on), a RELEASE is driven by a tag. For Gerrit projects the release tag
+# is pushed to Gerrit and replicated to the GitHub mirror, where it fires
+# this standard tag-push event. There is no Gerrit change context on a
+# tag, so no votes or comments are cast — this caller is therefore
+# near-identical to the GitHub-native release caller (github.yaml), and
+# release workflows are tag-triggered ONLY (no workflow_dispatch).
+#
+# REGISTRY PUBLISHING IS NOT NEEDED FOR GO MODULES. The Go module proxy
+# serves module versions straight from the repository tags (the GitHub
+# mirror for Gerrit projects). The reusable workflow exposes a `tag`
+# output and leaves the run-scoped build artefacts in place, so extra
+# caller-side jobs (stacked after the `release` job below) have
+# everything they need.
+# =============================================================================
+name: 'Gerrit Release'
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    tags:
+      - '**'
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  release:
+    name: 'Build/Test/Release'
+    # Skip tag deletion events
+    if: "!github.event.deleted"
+    permissions:
+      contents: write       # Create the GitHub release / attach assets
+      id-token: write       # OIDC for build provenance attestations
+      attestations: write   # Build provenance attestations
+    # REPLACE the pinned SHA below with a go-workflows release SHA.
+    # The all-zero SHA is a non-functional placeholder, NOT a real commit.
+    # yamllint disable-line rule:line-length
+    uses: lfreleng-actions/go-workflows/.github/workflows/build-test-release.yaml@0000000000000000000000000000000000000000  # REPLACE: vX.Y.Z
+    # All inputs are optional; uncomment to tune.
+    # with:
+    #   path_prefix: '.'
+    #   go_version: ''                # explicit Go version (default go.mod)
+    #   release_goos: 'linux,darwin,windows'
+    #   release_goarch: 'amd64,arm64'
+    #   output_name: ''               # binary base name (default repo name)
+    #   attestations: true
+    #   sigstore_sign: true
+
+# Go module consumers fetch releases through the module proxy straight
+# from the tag; no separate publish job is necessary. Stack extra jobs
+# after the release job (consuming `needs.release.outputs.tag`) when
+# your project needs more, e.g. container image publishing.
