@@ -40,16 +40,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # TODO(pin-bump): bump to merged SHA of test-go-project#54
-          # (restores calculator package)
           - name: 'test-go-project'
             repository: 'lfreleng-actions/test-go-project'
-            ref: 'a77c5ec773edc266ddcc3c1d1c306e7bb3f12c30'
+            ref: '02a24ba15c4687eb443bf407b5fc0b4d099ab86f' # v0.1.0
             path_prefix: '.'
             build_target: './...'
             go_version_matrix: ''
-            # Calculator package missing at this pin; tests soft-fail
-            test_permit_fail: true
+            test_permit_fail: false
             audit_permit_fail: false
             grype_permit_fail: false
             gosec: false
