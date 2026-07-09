@@ -71,6 +71,11 @@ on:
         default: ''
 
       # --- Tests ---
+      tests_enabled:
+        description: 'Run the tests job (set false to skip tests)'
+        required: false
+        type: boolean
+        default: true
       test_args:
         description: 'Extra arguments passed to go test'
         required: false
@@ -91,6 +96,13 @@ on:
         required: false
         type: boolean
         default: false
+      test_artifact_path:
+        description: >-
+          Path (relative to path_prefix) of test output/reports to
+          upload as a workflow artefact; empty disables the upload
+        required: false
+        type: string
+        default: ''
 
       # --- Lint ---
       lint_version:
@@ -107,6 +119,11 @@ on:
         default: false
 
       # --- Audit ---
+      audit_enabled:
+        description: 'Run the dependency audit job (set false to skip)'
+        required: false
+        type: boolean
+        default: true
       gosec:
         description: 'Run the gosec security scanner during the audit'
         required: false
@@ -123,7 +140,14 @@ on:
         type: boolean
         default: false
 
-      # --- Grype scan ---
+      # --- SBOM/Grype scan ---
+      sbom_enabled:
+        description: >-
+          Generate an SBOM (set false to skip; also skips the
+          dependent Grype scan job)
+        required: false
+        type: boolean
+        default: true
       grype_fail_on:
         description: 'Minimum severity that fails the Grype scan'
         required: false
@@ -136,6 +160,23 @@ on:
         required: false
         type: boolean
         default: false
+
+      # --- Job timeouts ---
+      build_timeout_minutes:
+        description: 'Timeout (minutes) for the build job'
+        required: false
+        type: number
+        default: 10
+      test_timeout_minutes:
+        description: 'Timeout (minutes) for the tests job'
+        required: false
+        type: number
+        default: 15
+      audit_timeout_minutes:
+        description: 'Timeout (minutes) for the audit, SBOM and Grype jobs'
+        required: false
+        type: number
+        default: 10
 
       # --- Runner hardening ---
       harden_runner_egress:
@@ -178,13 +219,15 @@ permissions: {}
 
 jobs:
   gerrit-validate:
-    name: 'Validate Gerrit Inputs'
-    # Fails fast with a clear message when gerrit_refspec is set without
-    # the project/branch the Gerrit checkout path also requires. The
-    # build-chain root job depends on this, so invalid Gerrit inputs stop
-    # the pipeline early and cleanly. This job always runs (only the
-    # validation step is conditional), so gating dependents on it does
-    # not trip GitHub's "skipped need skips dependents" behaviour.
+    name: 'Validate Workflow Inputs'
+    # Fails fast with a clear message on invalid workflow inputs: the
+    # test artefact path, job timeouts, and the Gerrit parameters (when
+    # gerrit_refspec is set without the project/branch the Gerrit
+    # checkout path also requires). The build-chain root job depends on
+    # this, so invalid inputs stop the pipeline early and cleanly. This
+    # job always runs (only some validation steps are conditional), so
+    # gating dependents on it does not trip GitHub's "skipped need
+    # skips dependents" behaviour.
     # The job carries no harden-runner step by design: it performs pure
     # input-string validation with no checkout, artifacts or network
     # access, and loading the egress allow-list would itself add an
@@ -193,6 +236,72 @@ jobs:
     permissions: {}
     timeout-minutes: 2
     steps:
+      - name: 'Validate path_prefix input'
+        shell: bash
+        env:
+          PATH_PREFIX: ${{ inputs.path_prefix }}
+        run: |
+          # Require a relative, non-traversing path: later jobs cd
+          # into it and derive artefact/publish paths from it, so an
+          # empty value, absolute paths or .. segments could escape
+          # the checkout
+          # A single trailing slash is tolerated ('./' == '.',
+          # 'subdir/' == 'subdir')
+          PATH_PREFIX="${PATH_PREFIX%/}"
+          if [ "${PATH_PREFIX}" = '.' ]; then
+            exit 0
+          fi
+          if [[ ! "${PATH_PREFIX}" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] \
+            || [[ "${PATH_PREFIX}" =~ (^|/)\.\.(/|$) ]]; then
+            echo "::error::Invalid path_prefix input: ${PATH_PREFIX}"
+            exit 1
+          fi
+
+      - name: 'Validate test_artifact_path input'
+        if: inputs.test_artifact_path != ''
+        shell: bash
+        env:
+          TEST_ARTIFACT_PATH: ${{ inputs.test_artifact_path }}
+        run: |
+          # Require a relative, non-traversing path (the * wildcard
+          # permitted): the tests job joins it onto path_prefix for
+          # the artefact upload, so absolute paths or .. segments
+          # could pull in files from outside the checkout
+          valid='^[A-Za-z0-9._*-]+(/[A-Za-z0-9._*-]+)*/?$'
+          if [[ ! "${TEST_ARTIFACT_PATH}" =~ ${valid} ]] \
+            || [[ "${TEST_ARTIFACT_PATH}" =~ (^|/)\.\.(/|$) ]]; then
+            echo "::error::Invalid test_artifact_path input:" \
+              "${TEST_ARTIFACT_PATH}"
+            exit 1
+          fi
+
+      - name: 'Validate job timeout inputs'
+        shell: bash
+        env:
+          BUILD_TIMEOUT: ${{ inputs.build_timeout_minutes }}
+          TEST_TIMEOUT: ${{ inputs.test_timeout_minutes }}
+          AUDIT_TIMEOUT: ${{ inputs.audit_timeout_minutes }}
+        run: |
+          # Require whole-minute timeouts in the range 1-360 (the
+          # GitHub-hosted runner job cap). Values GitHub itself
+          # rejects (e.g. fractional numbers) can fail workflow
+          # evaluation before this step runs; for values that do
+          # reach it (zero, negative or out-of-range), this gives a
+          # clear fail-fast error
+          error=0
+          for entry in \
+            "build_timeout_minutes=${BUILD_TIMEOUT}" \
+            "test_timeout_minutes=${TEST_TIMEOUT}" \
+            "audit_timeout_minutes=${AUDIT_TIMEOUT}"; do
+            name="${entry%%=*}"; value="${entry#*=}"
+            if [[ ! "${value}" =~ ^[0-9]+$ ]] \
+              || [ "${value}" -lt 1 ] || [ "${value}" -gt 360 ]; then
+              echo "::error::Invalid ${name} input: ${value}"
+              error=1
+            fi
+          done
+          exit "${error}"
+
       - name: 'Require Gerrit project, branch and URL'
         if: inputs.gerrit_refspec != ''
         shell: bash
@@ -391,7 +500,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.build_timeout_minutes }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.go-metadata.outputs.matrix_json) }}
@@ -453,10 +562,11 @@ jobs:
     needs:
       - 'go-metadata'
       - 'build'
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # yamllint disable-line rule:line-length
+    if: ${{ !cancelled() && needs.build.result == 'success' && inputs.tests_enabled }}
     permissions:
       contents: read
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.test_timeout_minutes }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.go-metadata.outputs.matrix_json) }}
@@ -522,6 +632,17 @@ jobs:
           # matrix leg to avoid artifact name collisions.
           artifact_upload: ${{ inputs.coverage }}
           artifact_name: 'test-coverage-go-${{ matrix.go-version }}'
+
+      # Unique artifact name per matrix leg to avoid collisions
+      - name: 'Upload test artefacts'
+        if: ${{ !cancelled() && inputs.test_artifact_path != '' }}
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: go-test-results-${{ matrix.go-version }}
+          path: ${{ inputs.path_prefix }}/${{ inputs.test_artifact_path }}
+          retention-days: 7
+          if-no-files-found: warn
 
   go-lint:
     name: 'Lint'
@@ -600,10 +721,11 @@ jobs:
     needs:
       - 'go-metadata'
       - 'build'
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # yamllint disable-line rule:line-length
+    if: ${{ !cancelled() && needs.build.result == 'success' && inputs.audit_enabled }}
     permissions:
       contents: read
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.audit_timeout_minutes }}
     steps:
       - name: 'Load egress allow-list (block mode)'
         if: inputs.harden_runner_egress != 'audit'
@@ -670,8 +792,9 @@ jobs:
     name: 'Generate SBOM'
     runs-on: ubuntu-latest
     needs: 'build'
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
-    timeout-minutes: 10
+    # yamllint disable-line rule:line-length
+    if: ${{ !cancelled() && needs.build.result == 'success' && inputs.sbom_enabled }}
+    timeout-minutes: ${{ inputs.audit_timeout_minutes }}
     permissions:
       contents: read
     steps:
@@ -756,7 +879,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: 'sbom'
     if: ${{ !cancelled() && needs.sbom.result == 'success' }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.audit_timeout_minutes }}
     permissions:
       contents: read
     steps:
