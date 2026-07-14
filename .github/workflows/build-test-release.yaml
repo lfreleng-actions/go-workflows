@@ -107,6 +107,16 @@ on:
         required: false
         type: string
         default: ''
+      test_make_args:
+        description: >-
+          When set, run the project's Makefile via make-action instead of
+          the built-in 'go test' (a build+test hook for projects that must
+          run build steps first, e.g. compiling Go plugins). Runs
+          'make -C <path_prefix> <test_make_args>'. The coverage, race and
+          test_args inputs do not apply on this path.
+        required: false
+        type: string
+        default: ''
       coverage:
         description: 'Collect and report test coverage'
         required: false
@@ -1346,13 +1356,14 @@ jobs:
       # via the action's permit_fail input.
       - name: 'Run tests'
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/go-test-action@d4a80d07f236bb91e2bf0e00fdcbbaf303938941  # v0.0.1
+        uses: lfreleng-actions/go-test-action@5caee8cfff691851b3eed6748373d5aabfd926a7  # v0.1.0
         with:
           go_version: ${{ inputs.go_version }}
           path_prefix: ${{ inputs.path_prefix }}
           coverage: ${{ inputs.coverage }}
           race: ${{ inputs.race }}
           test_args: ${{ inputs.test_args }}
+          make_args: ${{ inputs.test_make_args }}
           # yamllint disable-line rule:line-length
           permit_fail: ${{ inputs.test_permit_fail || vars.NO_BLOCK_AUDIT_FAIL == 'true' }}
           artifact_upload: ${{ inputs.coverage }}

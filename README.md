@@ -75,38 +75,39 @@ inputs.
 
 <!-- markdownlint-disable MD013 -->
 
-| Name                      | Type    | Default            | Description                                                                    |
-| ------------------------- | ------- | ------------------ | ------------------------------------------------------------------------------ |
-| `repository`              | string  | `''`               | Repository to check out (owner/name); empty = calling repository               |
-| `ref`                     | string  | `''`               | Branch/tag/SHA to check out (empty = event ref; other repos: default branch)   |
-| `path_prefix`             | string  | `'.'`              | Path to the project root directory                                             |
-| `go_version_matrix`       | string  | `''`               | JSON array of Go versions, e.g. `["1.25", "1.26"]`; empty derives from go.mod  |
-| `build_target`            | string  | `'./...'`          | Package(s) passed to `go build`                                                |
-| `build_flags`             | string  | `''`               | Extra flags passed to `go build`                                               |
-| `tests_enabled`           | boolean | `true`             | Run the tests job (set false to skip tests)                                    |
-| `test_args`               | string  | `''`               | Extra arguments passed to `go test`                                            |
-| `coverage`                | boolean | `true`             | Collect and report test coverage                                               |
-| `race`                    | boolean | `true`             | Run tests with the Go race detector                                            |
-| `test_permit_fail`        | boolean | `false`            | Permit test failures without failing the workflow                              |
-| `test_artifact_path`      | string  | `''`               | Test output/reports path (relative to path_prefix) to upload; empty disables   |
-| `lint_version`            | string  | `'v2.12.2'`        | golangci-lint version to install (pinned for reproducibility)                  |
-| `lint_permit_fail`        | boolean | `false`            | Permit golangci-lint failures (the NO_BLOCK pattern)                           |
-| `audit_enabled`           | boolean | `true`             | Run the dependency audit job (set false to skip)                               |
-| `gosec`                   | boolean | `false`            | Run the gosec security scanner during the audit                                |
-| `staticcheck`             | boolean | `false`            | Run staticcheck during the audit                                               |
-| `audit_permit_fail`       | boolean | `false`            | Permit dependency audit failures (the NO_BLOCK pattern)                        |
-| `sbom_enabled`            | boolean | `true`             | Generate an SBOM (set false to skip; also skips the dependent Grype scan)      |
-| `grype_fail_on`           | string  | `'medium'`         | Severity threshold that fails the Grype scan                                   |
-| `grype_permit_fail`       | boolean | `false`            | Permit Grype findings without failing the job                                  |
-| `build_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the build job (release workflow default: `12`)           |
-| `test_timeout_minutes`    | number  | `15`               | Timeout (minutes) for the tests job                                            |
-| `audit_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the audit, SBOM and Grype jobs                           |
-| `harden_runner_egress`    | string  | `'block'`          | Harden-runner egress policy: `block` or `audit`                                |
-| `harden_runner_allowlist` | string  | (pinned reference) | Out-of-band harden-runner allow-list configuration                             |
-| `gerrit_refspec`          | string  | `''`               | Gerrit refspec of the change under test                                        |
-| `gerrit_project`          | string  | `''`               | Gerrit project name                                                            |
-| `gerrit_branch`           | string  | `''`               | Gerrit target branch                                                           |
-| `gerrit_url`              | string  | `''`               | Gerrit server URL; empty falls back to the `GERRIT_URL` variable               |
+| Name                      | Type    | Default            | Description                                                                                                  |
+| ------------------------- | ------- | ------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `repository`              | string  | `''`               | Repository to check out (owner/name); empty = calling repository                                             |
+| `ref`                     | string  | `''`               | Branch/tag/SHA to check out (empty = event ref; other repos: default branch)                                 |
+| `path_prefix`             | string  | `'.'`              | Path to the project root directory                                                                           |
+| `go_version_matrix`       | string  | `''`               | JSON array of Go versions, e.g. `["1.25", "1.26"]`; empty derives from go.mod                                |
+| `build_target`            | string  | `'./...'`          | Package(s) passed to `go build`                                                                              |
+| `build_flags`             | string  | `''`               | Extra flags passed to `go build`                                                                             |
+| `tests_enabled`           | boolean | `true`             | Run the tests job (set false to skip tests)                                                                  |
+| `test_args`               | string  | `''`               | Extra arguments passed to `go test`                                                                          |
+| `test_make_args`          | string  | `''`               | Run the project Makefile via make-action instead of `go test` (e.g. `test`); ignores coverage/race/test_args |
+| `coverage`                | boolean | `true`             | Collect and report test coverage                                                                             |
+| `race`                    | boolean | `true`             | Run tests with the Go race detector                                                                          |
+| `test_permit_fail`        | boolean | `false`            | Permit test failures without failing the workflow                                                            |
+| `test_artifact_path`      | string  | `''`               | Test output/reports path (relative to path_prefix) to upload; empty disables                                 |
+| `lint_version`            | string  | `'v2.12.2'`        | golangci-lint version to install (pinned for reproducibility)                                                |
+| `lint_permit_fail`        | boolean | `false`            | Permit golangci-lint failures (the NO_BLOCK pattern)                                                         |
+| `audit_enabled`           | boolean | `true`             | Run the dependency audit job (set false to skip)                                                             |
+| `gosec`                   | boolean | `false`            | Run the gosec security scanner during the audit                                                              |
+| `staticcheck`             | boolean | `false`            | Run staticcheck during the audit                                                                             |
+| `audit_permit_fail`       | boolean | `false`            | Permit dependency audit failures (the NO_BLOCK pattern)                                                      |
+| `sbom_enabled`            | boolean | `true`             | Generate an SBOM (set false to skip; also skips the dependent Grype scan)                                    |
+| `grype_fail_on`           | string  | `'medium'`         | Severity threshold that fails the Grype scan                                                                 |
+| `grype_permit_fail`       | boolean | `false`            | Permit Grype findings without failing the job                                                                |
+| `build_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the build job (release workflow default: `12`)                                         |
+| `test_timeout_minutes`    | number  | `15`               | Timeout (minutes) for the tests job                                                                          |
+| `audit_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the audit, SBOM and Grype jobs                                                         |
+| `harden_runner_egress`    | string  | `'block'`          | Harden-runner egress policy: `block` or `audit`                                                              |
+| `harden_runner_allowlist` | string  | (pinned reference) | Out-of-band harden-runner allow-list configuration                                                           |
+| `gerrit_refspec`          | string  | `''`               | Gerrit refspec of the change under test                                                                      |
+| `gerrit_project`          | string  | `''`               | Gerrit project name                                                                                          |
+| `gerrit_branch`           | string  | `''`               | Gerrit target branch                                                                                         |
+| `gerrit_url`              | string  | `''`               | Gerrit server URL; empty falls back to the `GERRIT_URL` variable                                             |
 
 <!-- markdownlint-enable MD013 -->
 
