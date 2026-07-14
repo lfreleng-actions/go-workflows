@@ -46,6 +46,7 @@ jobs:
     #   path_prefix: '.'              # project root (monorepo subdir, etc.)
     #   go_version_matrix: ''         # e.g. '["1.25", "1.26"]'
     #   build_flags: ''               # extra go build flags
+    #   cgo_enabled: '1'              # cgo modules (e.g. confluent-kafka-go)
     #   test_args: ''                 # extra go test arguments
     #   coverage: true                # collect test coverage
     #   race: true                    # Go race detector

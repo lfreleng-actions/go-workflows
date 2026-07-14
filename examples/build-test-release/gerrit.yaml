@@ -57,6 +57,7 @@ jobs:
     #   release_goos: 'linux,darwin,windows'
     #   release_goarch: 'amd64,arm64'
     #   output_name: ''               # binary base name (default repo name)
+    #   cgo_enabled: '0'              # '1' needs a per-target C toolchain
     #   attestations: true
     #   sigstore_sign: true
 

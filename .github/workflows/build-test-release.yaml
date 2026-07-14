@@ -95,6 +95,15 @@ on:
         required: false
         type: string
         default: ''
+      cgo_enabled:
+        description: >-
+          CGO_ENABLED value for release builds ('0' or '1'). Defaults to
+          '0' for static, cross-compilable binaries. Setting '1' enables
+          cgo but requires a matching C toolchain for each
+          release_goos/release_goarch target.
+        required: false
+        type: string
+        default: '0'
 
       # --- Tests ---
       tests_enabled:
@@ -789,7 +798,7 @@ jobs:
           path_prefix: ${{ inputs.path_prefix }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          cgo_enabled: '0'
+          cgo_enabled: ${{ inputs.cgo_enabled }}
           build_flags: '-trimpath ${{ inputs.build_flags }}'
           # yamllint disable-line rule:line-length
           ldflags: '-s -w -X main.version=${{ needs.tag-validate.outputs.tag }}'
@@ -806,7 +815,7 @@ jobs:
           BUILD_TARGET: ${{ inputs.build_target }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
+          CGO_ENABLED: ${{ inputs.cgo_enabled }}
         run: |
           # Library project: verify the code compiles for this target,
           # honouring build_target so callers can exclude problematic

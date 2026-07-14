@@ -69,6 +69,14 @@ on:
         required: false
         type: string
         default: ''
+      cgo_enabled:
+        description: >-
+          CGO_ENABLED value for the build job ('0' or '1'). Set to '1' for
+          modules with cgo dependencies (for example confluent-kafka-go).
+          The test, lint and audit jobs rely on the Go toolchain default.
+        required: false
+        type: string
+        default: '0'
 
       # --- Tests ---
       tests_enabled:
@@ -564,6 +572,7 @@ jobs:
           path_prefix: ${{ inputs.path_prefix }}
           build_flags: ${{ inputs.build_flags }}
           build_target: ${{ inputs.build_target }}
+          cgo_enabled: ${{ inputs.cgo_enabled }}
           artifact_upload: 'false'
 
   tests:

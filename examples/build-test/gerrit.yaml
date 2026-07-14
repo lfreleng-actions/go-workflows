@@ -143,6 +143,7 @@ jobs:
       # Optional Go inputs (uncomment to tune):
       #   go_version_matrix: ''      # e.g. '["1.25", "1.26"]'
       #   build_flags: ''            # extra go build flags
+      #   cgo_enabled: '1'           # cgo modules (e.g. confluent-kafka-go)
       #   test_args: ''              # extra go test arguments
       #   gosec: false               # gosec security scanner
       #   staticcheck: false         # staticcheck analyser

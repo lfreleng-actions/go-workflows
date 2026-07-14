@@ -83,6 +83,7 @@ inputs.
 | `go_version_matrix`       | string  | `''`               | JSON array of Go versions, e.g. `["1.25", "1.26"]`; empty derives from go.mod                                |
 | `build_target`            | string  | `'./...'`          | Package(s) passed to `go build`                                                                              |
 | `build_flags`             | string  | `''`               | Extra flags passed to `go build`                                                                             |
+| `cgo_enabled`             | string  | `'0'`              | CGO_ENABLED for the build job (`'0'`/`'1'`); set `'1'` for cgo modules such as confluent-kafka-go            |
 | `tests_enabled`           | boolean | `true`             | Run the tests job (set false to skip tests)                                                                  |
 | `test_args`               | string  | `''`               | Extra arguments passed to `go test`                                                                          |
 | `test_make_args`          | string  | `''`               | Run the project Makefile via make-action instead of `go test` (e.g. `test`); ignores coverage/race/test_args |
@@ -197,6 +198,7 @@ lint job), plus:
 | `release_goarch` | string  | `'amd64,arm64'`          | Comma-separated GOARCH values for release binaries                   |
 | `build_target`   | string  | `'./...'`                | Package to build; the default probes the module root and `cmd/`      |
 | `output_name`    | string  | `''`                     | Base name for release binaries; empty uses the repository name       |
+| `cgo_enabled`    | string  | `'0'`                    | CGO_ENABLED for release builds; `'1'` needs a per-target C toolchain |
 | `attestations`   | boolean | `true`                   | Generate SLSA build provenance attestations for the release binaries |
 | `sigstore_sign`  | boolean | `true`                   | Sign the release checksums file with Sigstore (keyless/OIDC)         |
 
