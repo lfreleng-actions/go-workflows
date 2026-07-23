@@ -634,7 +634,7 @@ jobs:
 
       - name: 'Set up Go'
         # yamllint disable-line rule:line-length
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: ${{ inputs.go_version }}
           go-version-file: ${{ inputs.path_prefix }}/go.mod
@@ -757,7 +757,7 @@ jobs:
 
       - name: 'Set up Go'
         # yamllint disable-line rule:line-length
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: ${{ inputs.go_version }}
           go-version-file: ${{ inputs.path_prefix }}/go.mod
