@@ -45,6 +45,7 @@ jobs:
     permissions:
       contents: write       # Create the GitHub release / attach assets
       id-token: write       # OIDC for build provenance attestations
+      issues: read          # Grype scan reads approved CVE bypass issues
       attestations: write   # Build provenance attestations
     # REPLACE the pinned SHA below with a go-workflows release SHA.
     # The all-zero SHA is a non-functional placeholder, NOT a real commit.
