@@ -36,6 +36,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read  # repository-metadata-action queries PR data
+      issues: read  # Grype scan reads approved CVE bypass issues
     # REPLACE the pinned SHA below with a go-workflows release SHA.
     # The all-zero SHA is a non-functional placeholder, NOT a real commit.
     # yamllint disable-line rule:line-length
