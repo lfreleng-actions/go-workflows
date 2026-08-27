@@ -1,0 +1,52 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Configuration for zizmor (https://docs.zizmor.sh).
+#
+# The pre-commit hook deliberately widens zizmor's file scope to cover
+# examples/ as well as .github/workflows. The example callers are real
+# workflow files that consumers copy verbatim, so they warrant the same
+# audit as the workflows they call. Note that a zizmor *directory* scan
+# collects only .github/workflows and .github/dependabot.yml and never
+# descends into examples/, so passing explicit paths -- which pre-commit
+# does -- is the only way to audit them.
+
+rules:
+  impostor-commit:
+    ignore:
+      # The example callers pin an all-zero placeholder SHA. It cannot
+      # resolve, by design: it fails loudly and forces the reader to
+      # substitute a real release SHA rather than track a mutable ref.
+      # zizmor reports it as an impostor commit -- accurate, but not
+      # actionable here.
+
+      # Scoped to the exact placeholder LINES, not whole files. These
+      # examples also pin 5 real actions between them, and a file-wide
+      # ignore would hide a genuine impostor commit on any of those --
+      # precisely what this audit exists to catch.
+
+      # An ignore rule takes no path, only a base filename, so each entry
+      # applies to that line in every example sharing the name. Verified
+      # that no entry below lands on a different 'uses:' line in a
+      # same-named file.
+
+      # Line numbers make these brittle, which is the safer failure
+      # mode: editing an example above a placeholder shifts the line,
+      # the entry stops matching, and the finding reappears. That fails
+      # loudly and is fixed by correcting the number, where a file-wide
+      # ignore fails silently.
+
+      # Inert under the pre-commit hook, which pins zizmor to --offline;
+      # impostor-commit needs the GitHub API and does not run in that
+      # mode. These apply to online runs -- a developer invoking zizmor
+      # with a token, or a future CI lane.
+
+      # Configured here rather than as inline 'zizmor: ignore' comments
+      # on purpose. Consumers copy these files wholesale, and an inline
+      # suppression would travel with them, masking a genuine finding in
+      # their repository once they replace the placeholder.
+      - gerrit.yaml:53
+      - gerrit.yaml:133
+      - github.yaml:43
+      - github.yaml:49
