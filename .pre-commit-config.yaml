@@ -94,6 +94,35 @@ repos:
     rev: c04ed26e40637cab1aa9879c693832a9c120fb20  # frozen: v1.7.12.24
     hooks:
       - id: actionlint
+        # Upstream scopes this to '^.github/workflows/'. Widened to add
+        # the examples/ callers, which are real workflow files that
+        # consumers copy verbatim and so earn the same linting as the
+        # workflows they call. The upstream scope is preserved verbatim
+        # as the first alternative.
+        files: ^\.github/workflows/|^examples/.+\.ya?ml$
+
+  # Static analysis for GitHub Actions security issues. Scoped to cover
+  # examples/ as well as the upstream hook's own paths: a zizmor
+  # *directory* scan collects only .github/workflows and
+  # .github/dependabot.yml, so passing explicit paths (which pre-commit
+  # does) is the only way to audit the examples. See .github/zizmor.yml
+  # for the one ignore this requires.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa  # frozen: v1.29.0
+    hooks:
+      - id: zizmor
+        # Upstream pattern kept intact as the leading alternatives, so
+        # .github/dependabot.yml and any action.yaml keep their
+        # coverage; only the examples/ alternative is new.
+        # yamllint disable-line rule:line-length
+        files: (\.github/(workflows/.*|dependabot\.ya?ml))|(action\.ya?ml)$|^examples/.+\.ya?ml$
+        # zizmor decides between offline and online audits by probing
+        # for GH_TOKEN/GITHUB_TOKEN/ZIZMOR_GITHUB_TOKEN, so a developer
+        # who exports one would silently run a different audit set from
+        # tokenless CI. Pin the mode so the hook is deterministic
+        # everywhere. '--no-progress' repeats the upstream default,
+        # which supplying 'args' would otherwise replace.
+        args: ['--no-progress', '--offline']
 
   # Check for misspellings in documentation files
   - repo: https://github.com/codespell-project/codespell
@@ -117,12 +146,17 @@ repos:
     hooks:
       - id: check-github-actions
       - id: check-github-workflows
+      # Same schema, applied to the example callers, which live outside
+      # the hook's default .github/workflows scope.
+      - id: check-github-workflows
+        name: Validate GitHub Workflows (examples)
+        files: ^examples/.+\.ya?ml$
       - id: check-jsonschema
         name: Check GitHub Workflows set timeout-minutes
         args:
           - --builtin-schema
           - github-workflows-require-timeout
-        files: ^\.github/workflows/[^/]+$
+        files: ^(\.github/workflows/[^/]+|examples/.+)\.ya?ml$
         types:
           - yaml
       - id: check-readthedocs
