@@ -97,7 +97,8 @@ inputs.
 | `gosec`                   | boolean | `false`            | Run the gosec security scanner during the audit                                                              |
 | `staticcheck`             | boolean | `false`            | Run staticcheck during the audit                                                                             |
 | `audit_permit_fail`       | boolean | `false`            | Permit dependency audit failures (the NO_BLOCK pattern)                                                      |
-| `sbom_enabled`            | boolean | `true`             | Generate an SBOM (set false to skip; also skips the dependent Grype scan)                                    |
+| `sbom_enabled`            | boolean | `true`             | Generate an SBOM (set false to skip; Grype then has nothing to scan)                                         |
+| `grype_enabled`           | boolean | `true`             | Run the Grype scan (set false to keep the SBOM but skip the scan)                                            |
 | `grype_fail_on`           | string  | `'medium'`         | Severity threshold that fails the Grype scan                                                                 |
 | `grype_permit_fail`       | boolean | `false`            | Permit Grype findings without failing the job                                                                |
 | `build_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the build job (release workflow default: `12`)                                         |

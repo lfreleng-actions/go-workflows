@@ -174,8 +174,18 @@ on:
       # --- SBOM/Grype scan ---
       sbom_enabled:
         description: >-
-          Generate an SBOM (set false to skip; also skips the
-          dependent Grype scan job)
+          Generate an SBOM (set false to skip). The Grype scan
+          reads the SBOM, so skipping generation leaves it nothing to
+          scan. To keep the SBOM but drop the scan, use grype_enabled.
+        required: false
+        type: boolean
+        default: true
+      grype_enabled:
+        description: >-
+          Run the Grype vulnerability scan over the generated SBOM (set
+          false to skip). Decoupling is one-way: disabling the scan
+          keeps the SBOM, but disabling the SBOM also stops the scan,
+          which has nothing to read.
         required: false
         type: boolean
         default: true
@@ -1114,7 +1124,8 @@ jobs:
     name: 'Grype Audit SBOM'
     runs-on: ubuntu-latest
     needs: 'sbom'
-    if: ${{ !cancelled() && needs.sbom.result == 'success' }}
+    # yamllint disable-line rule:line-length
+    if: ${{ !cancelled() && needs.sbom.result == 'success' && inputs.grype_enabled }}
     timeout-minutes: ${{ inputs.audit_timeout_minutes }}
     permissions:
       contents: read
@@ -1172,7 +1183,7 @@ jobs:
       - 'sbom'
       - 'grype'
     # yamllint disable-line rule:line-length
-    if: ${{ !cancelled() && needs.build.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.audit.result) && contains(fromJSON('["success", "skipped"]'), needs.sbom.result) && contains(fromJSON('["success", "skipped"]'), needs.grype.result) && inputs.tests_enabled }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.audit.result == 'success' || (needs.audit.result == 'skipped' && !inputs.audit_enabled)) && (needs.sbom.result == 'success' || (needs.sbom.result == 'skipped' && !inputs.sbom_enabled)) && (needs.grype.result == 'success' || (needs.grype.result == 'skipped' && (!inputs.grype_enabled || !inputs.sbom_enabled))) && inputs.tests_enabled }}
     permissions:
       contents: read
     timeout-minutes: ${{ inputs.test_timeout_minutes }}
@@ -1258,19 +1269,24 @@ jobs:
     # The checksums/sign-artefacts/attest jobs skip for library
     # projects (or when signing/attestation toggles are off), and
     # tests/audit/sbom/grype skip when their enable toggles are
-    # false; tolerate skipped results, but never a failure (a failed
-    # test suite, audit, SBOM or Grype scan blocks the release here)
+    # false; tolerate a skip ONLY when its toggle explains it, and
+    # never a failure. A bare 'skipped' is ambiguous: grype also
+    # skips when the sbom job FAILS, and accepting that would let a
+    # release proceed with no scan performed at all.
     if: >-
       ${{ !cancelled()
           && needs.build.result == 'success'
           && contains(fromJSON('["success", "skipped"]'),
                       needs.tests.result)
-          && contains(fromJSON('["success", "skipped"]'),
-                      needs.audit.result)
-          && contains(fromJSON('["success", "skipped"]'),
-                      needs.sbom.result)
-          && contains(fromJSON('["success", "skipped"]'),
-                      needs.grype.result)
+          && (needs.audit.result == 'success'
+              || (needs.audit.result == 'skipped'
+                  && !inputs.audit_enabled))
+          && (needs.sbom.result == 'success'
+              || (needs.sbom.result == 'skipped'
+                  && !inputs.sbom_enabled))
+          && (needs.grype.result == 'success'
+              || (needs.grype.result == 'skipped'
+                  && (!inputs.grype_enabled || !inputs.sbom_enabled)))
           && (needs.checksums.result == 'success'
               || needs.checksums.result == 'skipped')
           && (needs.sign-artefacts.result == 'success'
