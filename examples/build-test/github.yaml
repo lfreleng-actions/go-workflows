@@ -56,5 +56,7 @@ jobs:
     #   gosec: false                  # gosec security scanner
     #   staticcheck: false            # staticcheck analyser
     #   audit_permit_fail: false      # soft-fail dependency audit
+    #   sbom_enabled: true            # false skips SBOM generation
+    #   grype_enabled: true           # false skips the Grype scan only
     #   grype_fail_on: 'medium'       # Grype severity gate
     #   harden_runner_egress: 'block' # 'block' (default) or 'audit'
