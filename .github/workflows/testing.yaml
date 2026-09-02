@@ -77,7 +77,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read  # repository-metadata-action queries PR data
-      issues: read  # Grype scan reads approved CVE bypass issues
     uses: ./.github/workflows/build-test.yaml
     with:
       repository: ${{ matrix.repository }}

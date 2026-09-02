@@ -123,7 +123,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      issues: read  # Grype scan reads approved CVE bypass issues
     # yamllint disable-line rule:line-length
     uses: lfreleng-actions/go-workflows/.github/workflows/build-test.yaml@<SHA>  # vX.Y.Z
     # with:
@@ -232,7 +231,6 @@ jobs:
     permissions:
       contents: write
       id-token: write
-      issues: read  # Grype scan reads approved CVE bypass issues
       attestations: write
     # yamllint disable-line rule:line-length
     uses: lfreleng-actions/go-workflows/.github/workflows/build-test-release.yaml@<SHA>  # vX.Y.Z
