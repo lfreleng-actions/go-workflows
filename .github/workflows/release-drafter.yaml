@@ -30,7 +30,7 @@ jobs:
       # yamllint disable-line rule:line-length
       - uses: lfreleng-actions/harden-runner-block-action@805eedb0508c07714b61887a2b87a5c4bbeff22a  # v0.12.1
         with:
-          config: '@f0f76ac22f342c9a788ebcabe584e68a79cc2e83'  # v0.16.0
+          config: '@ec0736244fc776e326283c6af6840e30f316f63c'  # v0.16.1
 
       # Harden the runner with the just-loaded allow-list.
       - name: 'Harden runner (block)'
