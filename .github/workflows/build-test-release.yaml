@@ -801,7 +801,7 @@ jobs:
         if: needs.release-matrix.outputs.build_binary == 'true'
         id: build
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/go-build-action@3d4c7aef5040660688b5c35aaef0f0a91e11cb94  # v0.0.1
+        uses: lfreleng-actions/go-build-action@beaa74353b0b206af38c22785c6d5b17ef5f0896  # v0.0.2
         with:
           go_version: ${{ inputs.go_version }}
           path_prefix: ${{ inputs.path_prefix }}
