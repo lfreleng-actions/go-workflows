@@ -794,7 +794,7 @@ jobs:
       # via the action's permit_fail input.
       - name: 'Audit dependencies'
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/go-audit-action@3164e5b31c230a782e4e8bb0e21f313307f703a9  # v0.0.1
+        uses: lfreleng-actions/go-audit-action@5a130c87ccf4df0b4c84dc1ee7cc6388fc2716ea  # v0.0.2
         with:
           path_prefix: ${{ inputs.path_prefix }}
           # The audit tools carry their own minimum Go requirements
