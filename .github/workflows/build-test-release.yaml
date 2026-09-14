@@ -16,6 +16,12 @@
 #     -> checksums -> sign-artefacts
 #     -> attest
 #     -> attach-artefacts -> promote-release
+#   build -> cbom
+#
+# The cbom leg hangs off build on its own edge because it is the one
+# exception to that gating inversion: it is informational, appears in
+# no other job's needs, and cannot fail the run. See the job for why
+# that is pinned rather than configurable.
 #
 # Go module consumers fetch releases through the module proxy straight
 # from the tag, so this workflow attaches binary artefacts, checksums,
@@ -202,6 +208,56 @@ on:
         type: boolean
         default: false
 
+      # --- CBOM (informational) ---
+      # A CBOM records which cryptographic algorithms, key sizes, modes
+      # and protocols the code actually calls, which an SBOM cannot
+      # express, and it feeds post-quantum readiness assessments. Go
+      # coverage is the crypto standard library (bar crypto/x509) plus
+      # hkdf, pbkdf2 and sha3 from golang.org/x/crypto.
+      #
+      # There is deliberately no cbom_permit_fail alongside these: the
+      # leg is advisory by contract, so the job pins the action's
+      # fail_on_error to false and carries continue-on-error. Callers
+      # that do not want the report turn the whole job off instead.
+      cbom_enabled:
+        description: >-
+          Generate a CycloneDX Cryptography Bill of Materials (CBOM).
+          Informational: the job never fails the workflow run. Set
+          false to drop it.
+        required: false
+        type: boolean
+        default: true
+      cbom_languages:
+        description: >-
+          Comma-separated languages to scan: java, python, go, csharp.
+          Empty auto-detects from the checked-out tree, which is right
+          for a polyglot repository as well as a plain Go one.
+        required: false
+        type: string
+        default: ''
+      cbom_exclude:
+        description: >-
+          Comma-separated Java regex patterns excluded from scanning.
+          Empty keeps the scanner default, which skips test sources.
+        required: false
+        type: string
+        default: ''
+      cbom_module_cboms:
+        description: >-
+          Emit a per-module CBOM alongside the consolidated one, which
+          attributes each finding to the module that made it.
+        required: false
+        type: boolean
+        default: true
+      cbom_empty_cboms:
+        description: >-
+          Write CBOM files even when the scan finds no cryptographic
+          assets. False uploads nothing for a project that calls none,
+          at the cost of losing the evidence that a scan ran.
+        required: false
+        type: boolean
+        default: true
+
       # --- Job timeouts ---
       build_timeout_minutes:
         description: 'Timeout (minutes) for the build job'
@@ -218,6 +274,13 @@ on:
         required: false
         type: number
         default: 10
+      cbom_timeout_minutes:
+        description: >-
+          Timeout (minutes) for the CBOM job. Longer than the audit
+          jobs because it pulls a container image before it scans.
+        required: false
+        type: number
+        default: 15
 
       # --- Runner hardening ---
       harden_runner_egress:
@@ -356,6 +419,7 @@ jobs:
           BUILD_TIMEOUT: ${{ inputs.build_timeout_minutes }}
           TEST_TIMEOUT: ${{ inputs.test_timeout_minutes }}
           AUDIT_TIMEOUT: ${{ inputs.audit_timeout_minutes }}
+          CBOM_TIMEOUT: ${{ inputs.cbom_timeout_minutes }}
         run: |
           # Require whole-minute timeouts in the range 1-360 (the
           # GitHub-hosted runner job cap). Values GitHub itself
@@ -367,7 +431,8 @@ jobs:
           for entry in \
             "build_timeout_minutes=${BUILD_TIMEOUT}" \
             "test_timeout_minutes=${TEST_TIMEOUT}" \
-            "audit_timeout_minutes=${AUDIT_TIMEOUT}"; do
+            "audit_timeout_minutes=${AUDIT_TIMEOUT}" \
+            "cbom_timeout_minutes=${CBOM_TIMEOUT}"; do
             name="${entry%%=*}"; value="${entry#*=}"
             if [[ ! "${value}" =~ ^[0-9]+$ ]] \
               || [ "${value}" -lt 1 ] || [ "${value}" -gt 360 ]; then
@@ -1175,6 +1240,146 @@ jobs:
           # yamllint disable-line rule:line-length
           permit-fail: ${{ inputs.grype_permit_fail || vars.NO_BLOCK_AUDIT_FAIL == 'true' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Informational leg, and the one exception to this workflow's gating
+  # inversion: the audit legs gate the tests, but nothing gates on the
+  # CBOM and the CBOM gates nothing, so it never delays the release
+  # chain and does not appear in the tests job's needs. It remains a
+  # job in the run, though, and a run is not complete until every job
+  # is, so a scan that outlasts every other branch does extend the
+  # total. Observed at 34-41 seconds against the self-test fixtures;
+  # cbom_timeout_minutes bounds the pathological case.
+  #
+  # It cannot fail the run. Three things could otherwise: a scanner
+  # error (the action's fail_on_error is pinned false), a runner or
+  # input problem the action rejects outright, and the job timeout.
+  # continue-on-error covers all three, because the value of a CBOM is
+  # the report it produces, never a verdict it withholds. Callers who
+  # do not want the report set cbom_enabled false.
+  #
+  # 'needs: build' orders the job rather than feeding it: the scan does
+  # its own checkout and reads no build output. It gates on a
+  # successful build like the SBOM leg, so a tree that does not compile
+  # does not spend runner time on an advisory report.
+  #
+  # The CBOM does not join the release assets. attach-artefacts
+  # publishes what a consumer verifies a download against, and this job
+  # is permitted to fail, so a release would carry the report only
+  # sometimes. It uploads as a workflow artefact instead, which records
+  # the scan without implying the release is incomplete without it.
+  cbom:
+    name: 'Generate CBOM'
+    runs-on: ubuntu-latest
+    needs: 'build'
+    continue-on-error: true
+    # yamllint disable-line rule:line-length
+    if: ${{ !cancelled() && needs.build.result == 'success' && inputs.cbom_enabled }}
+    timeout-minutes: ${{ inputs.cbom_timeout_minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: 'Load egress allow-list'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@805eedb0508c07714b61887a2b87a5c4bbeff22a  # v0.12.1
+        with:
+          config: ${{ inputs.harden_runner_allowlist }}
+          allow_list_summary: 'false'
+      - name: 'Harden runner'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1  # v2.21.1
+        with:
+          # yamllint disable-line rule:line-length
+          egress-policy: ${{ inputs.harden_runner_egress == 'audit' && 'audit' || 'block' }}
+          # The scanner is a container, so the image pull needs the
+          # registry endpoints. The organisation allow-list already
+          # carries both; naming them here keeps the job working when a
+          # caller points harden_runner_allowlist at a narrower list.
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+
+      - name: 'Checkout Gerrit change'
+        if: inputs.gerrit_refspec != ''
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/checkout-gerrit-change-action@298f53bbbc1d5f9e54df9feb484d110dc2b33197  # v1.1.0
+        with:
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          gerrit-project: ${{ inputs.gerrit_project }}
+          # yamllint disable-line rule:line-length
+          gerrit-url: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+          delay: '0s'
+          repository: ${{ inputs.repository || github.repository }}
+          ref: refs/heads/${{ inputs.gerrit_branch }}
+      - name: 'Checkout repository'
+        if: inputs.gerrit_refspec == ''
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # The action writes its own job summary (languages scanned,
+      # asset count, file count), so no summary step follows.
+      #
+      # Known limitation: the CBOM's metadata block (gitUrl, revision,
+      # commit) comes from the run's own GITHUB_* context, which names
+      # the CALLING repository and commit. Where 'repository' or 'ref'
+      # selects a different tree, and on a Gerrit-sourced run where the
+      # checked-out change is not the mirror commit, that metadata
+      # describes the caller rather than the source scanned. The
+      # cryptographic findings are unaffected. Fixing it needs explicit
+      # metadata inputs on cbom-action, which has none today.
+      #
+      # Its 'image' input is not surfaced as a workflow input. The
+      # default is a digest that travels with the action version pinned
+      # above, and a workflow input defaulting to empty cannot fall
+      # through to it: a composite action applies a default only when
+      # the input is absent, never when it arrives empty. Restating
+      # the digest here instead would fork the pin from the action that
+      # owns it. Bump the action to move the scanner.
+      - name: 'Generate CBOM'
+        id: cbom
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/cbom-action@06a25686fe4ebcbb8c9f28d6948cdca7d65ed852  # v0.0.1
+        with:
+          path_prefix: ${{ inputs.path_prefix }}
+          # Reports go to runner temp, never the workspace. The action
+          # defaults output_directory to '.', and its file_count and
+          # cbom_pattern outputs cover every cbom*.json sitting in that
+          # directory rather than only the files this scan wrote. A
+          # project that tracks its own cbom.json at the repository
+          # root would otherwise have it overwritten, counted as scan
+          # output and uploaded as though this job produced it. An
+          # empty directory per job keeps the outputs describing this
+          # scan alone.
+          output_directory: ${{ runner.temp }}/cbom
+          languages: ${{ inputs.cbom_languages }}
+          exclude: ${{ inputs.cbom_exclude }}
+          module_cboms: ${{ inputs.cbom_module_cboms }}
+          empty_cboms: ${{ inputs.cbom_empty_cboms }}
+          # Pinned rather than exposed. continue-on-error above already
+          # absorbs the failure, so an input offering to flip this
+          # would promise a gate the job cannot deliver.
+          fail_on_error: 'false'
+
+      - name: 'Upload CBOM artifacts'
+        if: ${{ steps.cbom.outputs.file_count != '0' }}
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cbom-files
+          # Absolute glob under runner temp, covering the consolidated
+          # CBOM and, when cbom_module_cboms is on, the per-module files
+          # beside it. upload-artifact roots the archive at the common
+          # ancestor, so the files land at the artefact root.
+          path: ${{ steps.cbom.outputs.cbom_pattern }}
+          retention-days: 45
+          # The condition above already skips an empty scan, so a miss
+          # here is a surprise worth logging but not worth failing an
+          # informational job over.
+          if-no-files-found: warn
 
   tests:
     name: 'Tests'

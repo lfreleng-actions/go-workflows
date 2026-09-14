@@ -52,7 +52,7 @@ Neither workflow declares secrets: jobs use the calling workflow's
 Job graph (`->` denotes sequence; jobs in `{ }` run in parallel):
 
 ```text
-go-metadata -> build -> { tests | go-lint | audit | sbom -> grype }
+go-metadata -> build -> { tests | go-lint | audit | sbom -> grype | cbom }
 ```
 
 - `go-metadata` derives the Go version matrix from `go.mod` via
@@ -66,10 +66,53 @@ go-metadata -> build -> { tests | go-lint | audit | sbom -> grype }
   go-audit-action
 - `sbom` generates a CycloneDX SBOM with sbom-action, then `grype`
   scans it for known vulnerabilities
+- `cbom` generates a CycloneDX Cryptography Bill of Materials with
+  cbom-action; informational, and it never fails the run (see below)
 
 The `repository-metadata` job runs in parallel as an informational
 step, and the `gerrit-validate` job fails fast on inconsistent Gerrit
 inputs.
+
+### CBOM (informational)
+
+The `cbom` job records the algorithms, key sizes, modes, protocols and
+certificates the code actually calls. An SBOM cannot express that, and
+a CBOM is what post-quantum readiness assessments read. For Go the
+scanner covers the `crypto` standard library (bar `crypto/x509`) plus
+`hkdf`, `pbkdf2` and `sha3` from `golang.org/x/crypto`.
+
+**It never fails the workflow run.** The job sets `continue-on-error`
+and pins the action's `fail_on_error` to `false`, so a scanner error, a
+rejected input, or the job timeout all leave the run green. That covers
+the whole leg on purpose — there is no `cbom_permit_fail` input,
+because the report is advisory by contract rather than by configuration.
+Set `cbom_enabled: false` to drop the job entirely.
+
+It runs in parallel with the test, lint, audit and SBOM legs and gates
+nothing, so it never delays another job. The run as a whole still waits
+for it, as it does for every job, so a scan that outlasts every other
+branch extends the total; `cbom_timeout_minutes` bounds that. In the
+self-test it takes 34–41 seconds, well inside the build. `needs: build`
+orders it after the build; it does its own checkout and reads no build
+output.
+
+In the release workflow this leg sits outside the gating inversion:
+it neither gates `tests` nor joins the release assets, because a job
+permitted to fail would attach its output at random.
+
+CBOM files upload as the `cbom-files` artefact with 45-day retention,
+matching the SBOM. The job writes reports under `RUNNER_TEMP`, never the
+workspace, so a project that tracks its own `cbom.json` keeps it. The
+scanner image is a digest pinned inside `cbom-action`, so it moves when
+the action pin moves rather than through a workflow input.
+
+**Known limitation.** The CBOM's metadata block (repository URL, branch,
+commit) comes from the workflow run's own context, so it names the
+*calling* repository and commit. Where `repository` or `ref` points at a
+different tree, and on a Gerrit-sourced run where the checked-out change
+is not the mirror commit, that metadata describes the caller rather than
+the source scanned. This does not touch the cryptographic findings themselves.
+Fixing it needs explicit metadata inputs on `cbom-action`.
 
 ### Build/Test Inputs
 
@@ -101,9 +144,15 @@ inputs.
 | `grype_enabled`           | boolean | `true`             | Run the Grype scan (set false to keep the SBOM but skip the scan)                                            |
 | `grype_fail_on`           | string  | `'medium'`         | Severity threshold that fails the Grype scan                                                                 |
 | `grype_permit_fail`       | boolean | `false`            | Permit Grype findings without failing the job                                                                |
+| `cbom_enabled`            | boolean | `true`             | Generate a CBOM (set false to skip the job); the job never fails the run                                     |
+| `cbom_languages`          | string  | `''`               | Comma-separated languages to scan (`java`, `python`, `go`, `csharp`); empty auto-detects                     |
+| `cbom_exclude`            | string  | `''`               | Comma-separated Java regex patterns to exclude; empty skips test sources                                     |
+| `cbom_module_cboms`       | boolean | `true`             | Emit a per-module CBOM alongside the consolidated one                                                        |
+| `cbom_empty_cboms`        | boolean | `true`             | Write CBOM files even when the scan finds no cryptographic assets                                            |
 | `build_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the build job (release workflow default: `12`)                                         |
 | `test_timeout_minutes`    | number  | `15`               | Timeout (minutes) for the tests job                                                                          |
 | `audit_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the audit, SBOM and Grype jobs                                                         |
+| `cbom_timeout_minutes`    | number  | `15`               | Timeout (minutes) for the CBOM job; covers the container image pull as well as the scan                      |
 | `harden_runner_egress`    | string  | `'block'`          | Harden-runner egress policy: `block` or `audit`                                                              |
 | `harden_runner_allowlist` | string  | (pinned reference) | Out-of-band harden-runner allow-list configuration                                                           |
 | `gerrit_refspec`          | string  | `''`               | Gerrit refspec of the change under test                                                                      |
@@ -158,6 +207,7 @@ Job graph:
 ```text
 tag-validate -> release-matrix -> build (GOOS x GOARCH)
 build -> { audit | sbom -> grype } -> tests
+build -> cbom
 build -> checksums -> sign-artefacts
 build -> attest
 { tests | checksums | sign-artefacts | attest }
@@ -180,6 +230,9 @@ build -> attest
   gate on the audits (gating inversion: audits gate tests on releases);
   jobs skipped via the `*_enabled` toggles never block the release,
   while genuine failures always do
+- `cbom` mirrors the build-test workflow and stays outside that
+  inversion: it gates nothing, cannot fail the run, and uploads as a
+  workflow artefact rather than a release asset
 - `attach-artefacts` uploads binaries, checksums, the signature bundle
   and SBOM files to the draft release; `promote-release` publishes it
 
