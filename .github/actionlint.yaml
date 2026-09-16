@@ -9,3 +9,17 @@ paths:
       # Ignore deliberate test failure
       - 'input "invalid_input" is not defined in action .+'
       - 'missing input "input" which is required by action .+'
+      # GitHub's self-repository reference ('$/', July 2026) resolves
+      # this repository at the commit already running, and is now the
+      # recommended way to call a sibling workflow. actionlint does not
+      # know the form yet and rejects it as malformed; zizmor asks for
+      # it from v1.30.
+      #
+      # Each pattern names the workflow it excuses, rather than
+      # matching '$/' generally: a wildcard would also swallow the
+      # diagnostic for a mistyped sibling path, which is the one thing
+      # this check is still able to catch here. A call added or
+      # renamed needs its own line. Remove all of them once actionlint
+      # learns the form.
+      # yamllint disable-line rule:line-length
+      - 'reusable workflow call "\$/\.github/workflows/build\-test\.yaml" at "uses" is not following the format'
