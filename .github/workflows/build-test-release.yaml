@@ -1444,7 +1444,7 @@ jobs:
       # via the action's permit_fail input.
       - name: 'Run tests'
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/go-test-action@5caee8cfff691851b3eed6748373d5aabfd926a7  # v0.1.0
+        uses: lfreleng-actions/go-test-action@e88abb6cb59c0e0fd54505124df6eef058876bf8  # v0.1.1
         with:
           go_version: ${{ inputs.go_version }}
           path_prefix: ${{ inputs.path_prefix }}
