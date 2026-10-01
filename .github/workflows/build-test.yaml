@@ -921,7 +921,7 @@ jobs:
       - name: 'Generate SBOM'
         id: sbom
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/sbom-action@7834632c8458679c813adf3c06e496980808fcbe  # v0.0.2
+        uses: lfreleng-actions/sbom-action@56a6edfe96ec4655379faea23daf27f14e23b796  # v0.1.0
         with:
           path_prefix: ${{ inputs.path_prefix }}
           filename_prefix: 'sbom-cyclonedx'
