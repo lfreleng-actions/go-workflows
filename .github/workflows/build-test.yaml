@@ -287,7 +287,7 @@ on:
         required: false
         type: string
         # yamllint disable-line rule:line-length
-        default: 'lfreleng-actions//.github/harden-runner/lfreleng-actions/allow_list.txt@ec0736244fc776e326283c6af6840e30f316f63c'  # v0.16.1
+        default: 'lfreleng-actions//.github/harden-runner/lfreleng-actions/allow_list.txt@e0e35011ee145321a51d3226f044ec88dfe645b1'  # v0.16.4
 
       # --- Gerrit-aware checkout (empty unless dispatched via Gerrit) ---
       gerrit_refspec:
@@ -539,7 +539,7 @@ jobs:
       - name: 'Gather build metadata'
         id: metadata
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/build-metadata-action@37764159ab25aac45d0a04edf78935877c0283f5  # v0.8.2
+        uses: lfreleng-actions/build-metadata-action@ef53139abdf48a63b097efc740202c140571b0d4  # v0.8.3
         with:
           path_prefix: ${{ inputs.path_prefix }}
 
@@ -921,7 +921,7 @@ jobs:
       - name: 'Generate SBOM'
         id: sbom
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/sbom-action@56a6edfe96ec4655379faea23daf27f14e23b796  # v0.1.0
+        uses: lfreleng-actions/sbom-action@58b6094cf67d072d6eb772590c43ee52c8c69bb6  # v0.2.0
         with:
           path_prefix: ${{ inputs.path_prefix }}
           filename_prefix: 'sbom-cyclonedx'
