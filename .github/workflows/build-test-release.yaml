@@ -989,9 +989,9 @@ jobs:
       - name: 'Sign checksums with cosign'
         shell: bash
         run: |
-          # Keyless signature over the checksums file; verify with:
-          #   cosign verify-blob --bundle checksums.txt.sigstore.json \
-          #     checksums.txt
+          # Keyless signature over the checksums file; the README's
+          # "Verifying Release Artefacts" section gives the cosign
+          # verify-blob command and the identity flags it needs
           cosign sign-blob --yes \
             --bundle checksums.txt.sigstore.json \
             checksums.txt
@@ -1042,10 +1042,17 @@ jobs:
           path: 'dist'
 
       # Generates SLSA build provenance for the release binaries,
-      # verifiable with `gh attestation verify`.
+      # verifiable with `gh attestation verify --signer-workflow`; see
+      # the README's "Verifying Release Artefacts" section.
+      #
+      # actions/attest rather than actions/attest-build-provenance: as
+      # of v4 the latter is a thin wrapper that forwards its inputs to
+      # the former, and GitHub directs new implementations to
+      # actions/attest. With no predicate supplied it emits SLSA build
+      # provenance by default.
       - name: 'Attest build provenance'
         # yamllint disable-line rule:line-length
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
         with:
           subject-path: 'dist/*'
 
