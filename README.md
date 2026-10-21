@@ -123,7 +123,7 @@ Fixing it needs explicit metadata inputs on `cbom-action`.
 | `repository`              | string  | `''`               | Repository to check out (owner/name); empty = calling repository                                             |
 | `ref`                     | string  | `''`               | Branch/tag/SHA to check out (empty = event ref; other repos: default branch)                                 |
 | `path_prefix`             | string  | `'.'`              | Path to the project root directory                                                                           |
-| `go_version_matrix`       | string  | `''`               | JSON array of Go versions, e.g. `["1.25", "1.26"]`; empty derives from go.mod                                |
+| `go_version_matrix`       | string  | `''`               | JSON array of Go versions, e.g. `["1.26", "1.27"]`; empty derives from go.mod                                |
 | `build_target`            | string  | `'./...'`          | Package(s) passed to `go build`                                                                              |
 | `build_flags`             | string  | `''`               | Extra flags passed to `go build`                                                                             |
 | `cgo_enabled`             | string  | `'0'`              | CGO_ENABLED for the build job (`'0'`/`'1'`); set `'1'` for cgo modules such as confluent-kafka-go            |
@@ -175,7 +175,7 @@ jobs:
     # yamllint disable-line rule:line-length
     uses: lfreleng-actions/go-workflows/.github/workflows/build-test.yaml@<SHA>  # vX.Y.Z
     # with:
-    #   go_version_matrix: '["1.25", "1.26"]'
+    #   go_version_matrix: '["1.26", "1.27"]'
     #   gosec: true
     #   staticcheck: true
 ```

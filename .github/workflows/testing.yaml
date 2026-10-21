@@ -56,7 +56,7 @@ jobs:
             staticcheck: false
             lint_permit_fail: false
           # go.mod declares Go 1.16 (too old to detect a matrix from),
-          # so the leg pins the matrix to Go 1.25.
+          # so the leg pins the matrix to Go 1.26.
           - name: 'multicloud-k8s'
             repository: 'onap/multicloud-k8s'
             ref: '5c3b1a96811024e65b0977305b6d6737a6e2d453'
@@ -67,7 +67,7 @@ jobs:
             # make go build discard outputs, avoiding a name collision
             # between the cmd binary and the cmd directory.
             build_target: './cmd ./internal/...'
-            go_version_matrix: '["1.25"]'
+            go_version_matrix: '["1.26"]'
             # Env-dependent test failure in internal/app at this pin
             test_permit_fail: true
             # gosec 38 / staticcheck 18 findings at this pin

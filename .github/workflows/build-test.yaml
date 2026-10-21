@@ -52,7 +52,7 @@ on:
       go_version_matrix:
         description: >-
           JSON array of Go versions to build/test against, e.g.
-          '["1.25", "1.26"]'. Empty derives the matrix from go.mod
+          '["1.26", "1.27"]'. Empty derives the matrix from go.mod
           via build-metadata-action.
         required: false
         type: string
