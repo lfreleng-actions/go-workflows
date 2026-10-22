@@ -44,7 +44,7 @@ jobs:
     # needs; everything else falls back to sensible defaults.
     # with:
     #   path_prefix: '.'              # project root (monorepo subdir, etc.)
-    #   go_version_matrix: ''         # e.g. '["1.25", "1.26"]'
+    #   go_version_matrix: ''         # e.g. '["1.26", "1.27"]'
     #   build_flags: ''               # extra go build flags
     #   cgo_enabled: '1'              # cgo modules (e.g. confluent-kafka-go)
     #   test_args: ''                 # extra go test arguments
