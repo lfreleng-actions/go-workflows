@@ -642,7 +642,7 @@ jobs:
 
       - name: 'Build project'
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/go-build-action@beaa74353b0b206af38c22785c6d5b17ef5f0896  # v0.0.2
+        uses: lfreleng-actions/go-build-action@e63ce1c40dc66fe1d3fdb1ded73a0d0a81f71795  # v0.0.3
         with:
           go_version: ${{ matrix.go-version }}
           path_prefix: ${{ inputs.path_prefix }}
@@ -709,7 +709,7 @@ jobs:
       # via the action's permit_fail input.
       - name: 'Run tests'
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/go-test-action@df1cb722d651b1bf4476fddb221e05a88629072a  # v0.1.2
+        uses: lfreleng-actions/go-test-action@b609109b7be8a2bf957b47600211f35bed1c8301  # v0.1.4
         with:
           go_version: ${{ matrix.go-version }}
           path_prefix: ${{ inputs.path_prefix }}
