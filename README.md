@@ -118,49 +118,105 @@ Fixing it needs explicit metadata inputs on `cbom-action`.
 
 <!-- markdownlint-disable MD013 -->
 
-| Name                      | Type    | Default            | Description                                                                                                  |
-| ------------------------- | ------- | ------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `repository`              | string  | `''`               | Repository to check out (owner/name); empty = calling repository                                             |
-| `ref`                     | string  | `''`               | Branch/tag/SHA to check out (empty = event ref; other repos: default branch)                                 |
-| `path_prefix`             | string  | `'.'`              | Path to the project root directory                                                                           |
-| `go_version_matrix`       | string  | `''`               | JSON array of Go versions, e.g. `["1.26", "1.27"]`; empty derives from go.mod                                |
-| `build_target`            | string  | `'./...'`          | Package(s) passed to `go build`                                                                              |
-| `build_flags`             | string  | `''`               | Extra flags passed to `go build`                                                                             |
-| `cgo_enabled`             | string  | `'0'`              | CGO_ENABLED for the build job (`'0'`/`'1'`); set `'1'` for cgo modules such as confluent-kafka-go            |
-| `tests_enabled`           | boolean | `true`             | Run the tests job (set false to skip tests)                                                                  |
-| `test_args`               | string  | `''`               | Extra arguments passed to `go test`                                                                          |
-| `test_make_args`          | string  | `''`               | Run the project Makefile via make-action instead of `go test` (e.g. `test`); ignores coverage/race/test_args |
-| `coverage`                | boolean | `true`             | Collect and report test coverage                                                                             |
-| `race`                    | boolean | `true`             | Run tests with the Go race detector                                                                          |
-| `test_permit_fail`        | boolean | `false`            | Permit test failures without failing the workflow                                                            |
-| `test_artifact_path`      | string  | `''`               | Test output/reports path (relative to path_prefix) to upload; empty disables                                 |
-| `lint_version`            | string  | `'v2.12.2'`        | golangci-lint version to install (pinned for reproducibility)                                                |
-| `lint_permit_fail`        | boolean | `false`            | Permit golangci-lint failures (the NO_BLOCK pattern)                                                         |
-| `audit_enabled`           | boolean | `true`             | Run the dependency audit job (set false to skip)                                                             |
-| `gosec`                   | boolean | `false`            | Run the gosec security scanner during the audit                                                              |
-| `staticcheck`             | boolean | `false`            | Run staticcheck during the audit                                                                             |
-| `audit_permit_fail`       | boolean | `false`            | Permit dependency audit failures (the NO_BLOCK pattern)                                                      |
-| `sbom_enabled`            | boolean | `true`             | Generate an SBOM (set false to skip; Grype then has nothing to scan)                                         |
-| `grype_enabled`           | boolean | `true`             | Run the Grype scan (set false to keep the SBOM but skip the scan)                                            |
-| `grype_fail_on`           | string  | `'medium'`         | Severity threshold that fails the Grype scan                                                                 |
-| `grype_permit_fail`       | boolean | `false`            | Permit Grype findings without failing the job                                                                |
-| `cbom_enabled`            | boolean | `true`             | Generate a CBOM (set false to skip the job); the job never fails the run                                     |
-| `cbom_languages`          | string  | `''`               | Comma-separated languages to scan (`java`, `python`, `go`, `csharp`); empty auto-detects                     |
-| `cbom_exclude`            | string  | `''`               | Comma-separated Java regex patterns to exclude; empty skips test sources                                     |
-| `cbom_module_cboms`       | boolean | `true`             | Emit a per-module CBOM alongside the consolidated one                                                        |
-| `cbom_empty_cboms`        | boolean | `true`             | Write CBOM files even when the scan finds no cryptographic assets                                            |
-| `build_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the build job (release workflow default: `12`)                                         |
-| `test_timeout_minutes`    | number  | `15`               | Timeout (minutes) for the tests job                                                                          |
-| `audit_timeout_minutes`   | number  | `10`               | Timeout (minutes) for the audit, SBOM and Grype jobs                                                         |
-| `cbom_timeout_minutes`    | number  | `15`               | Timeout (minutes) for the CBOM job; covers the container image pull as well as the scan                      |
-| `harden_runner_egress`    | string  | `'block'`          | Harden-runner egress policy: `block` or `audit`                                                              |
-| `harden_runner_allowlist` | string  | (pinned reference) | Out-of-band harden-runner allow-list configuration                                                           |
-| `gerrit_refspec`          | string  | `''`               | Gerrit refspec of the change under test                                                                      |
-| `gerrit_project`          | string  | `''`               | Gerrit project name                                                                                          |
-| `gerrit_branch`           | string  | `''`               | Gerrit target branch                                                                                         |
-| `gerrit_url`              | string  | `''`               | Gerrit server URL; empty falls back to the `GERRIT_URL` variable                                             |
+| Name                                   | Type    | Default            | Description                                                                                                  |
+| -------------------------------------- | ------- | ------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `repository`                           | string  | `''`               | Repository to check out (owner/name); empty = calling repository                                             |
+| `ref`                                  | string  | `''`               | Branch/tag/SHA to check out (empty = event ref; other repos: default branch)                                 |
+| `path_prefix`                          | string  | `'.'`              | Path to the project root directory                                                                           |
+| `go_version_matrix`                    | string  | `''`               | JSON array of Go versions, e.g. `["1.26", "1.27"]`; empty derives from go.mod                                |
+| `build_target`                         | string  | `'./...'`          | Package(s) passed to `go build`                                                                              |
+| `build_flags`                          | string  | `''`               | Extra flags passed to `go build`                                                                             |
+| `cgo_enabled`                          | string  | `'0'`              | CGO_ENABLED for the build job (`'0'`/`'1'`); set `'1'` for cgo modules such as confluent-kafka-go            |
+| `tests_enabled`                        | boolean | `true`             | Run the tests job (set false to skip tests)                                                                  |
+| `test_args`                            | string  | `''`               | Extra arguments passed to `go test`                                                                          |
+| `test_make_args`                       | string  | `''`               | Run the project Makefile via make-action instead of `go test` (e.g. `test`); ignores coverage/race/test_args |
+| `coverage`                             | boolean | `true`             | Collect and report test coverage                                                                             |
+| `race`                                 | boolean | `true`             | Run tests with the Go race detector                                                                          |
+| `test_permit_fail`                     | boolean | `false`            | Permit test failures without failing the workflow                                                            |
+| `test_artifact_path`                   | string  | `''`               | Test output/reports path (relative to path_prefix) to upload; empty disables                                 |
+| `lint_version`                         | string  | `'v2.12.2'`        | golangci-lint version to install (pinned for reproducibility)                                                |
+| `lint_permit_fail`                     | boolean | `false`            | Permit golangci-lint failures (the NO_BLOCK pattern)                                                         |
+| `audit_enabled`                        | boolean | `true`             | Run the dependency audit job (set false to skip)                                                             |
+| `gosec`                                | boolean | `false`            | Run the gosec security scanner during the audit                                                              |
+| `staticcheck`                          | boolean | `false`            | Run staticcheck during the audit                                                                             |
+| `audit_permit_fail`                    | boolean | `false`            | Permit dependency audit failures (the NO_BLOCK pattern)                                                      |
+| `sbom_enabled`                         | boolean | `true`             | Generate an SBOM (set false to skip; Grype then has nothing to scan)                                         |
+| `grype_enabled`                        | boolean | `true`             | Run the Grype scan (set false to keep the SBOM but skip the scan)                                            |
+| `grype_fail_on`                        | string  | `'medium'`         | Severity threshold that fails the Grype scan                                                                 |
+| `grype_permit_fail`                    | boolean | `false`            | Permit Grype findings without failing the job                                                                |
+| `cbom_enabled`                         | boolean | `true`             | Generate a CBOM (set false to skip the job); the job never fails the run                                     |
+| `cbom_languages`                       | string  | `''`               | Comma-separated languages to scan (`java`, `python`, `go`, `csharp`); empty auto-detects                     |
+| `cbom_exclude`                         | string  | `''`               | Comma-separated Java regex patterns to exclude; empty skips test sources                                     |
+| `cbom_module_cboms`                    | boolean | `true`             | Emit a per-module CBOM alongside the consolidated one                                                        |
+| `cbom_empty_cboms`                     | boolean | `true`             | Write CBOM files even when the scan finds no cryptographic assets                                            |
+| `build_timeout_minutes`                | number  | `10`               | Timeout (minutes) for the build job (release workflow default: `12`)                                         |
+| `test_timeout_minutes`                 | number  | `15`               | Timeout (minutes) for the tests job                                                                          |
+| `audit_timeout_minutes`                | number  | `10`               | Timeout (minutes) for the audit, SBOM and Grype jobs                                                         |
+| `cbom_timeout_minutes`                 | number  | `15`               | Timeout (minutes) for the CBOM job; covers the container image pull as well as the scan                      |
+| `harden_runner_egress`                 | string  | `'block'`          | Harden-runner egress policy: `block` or `audit`                                                              |
+| `harden_runner_allowlist`              | string  | (pinned reference) | Out-of-band harden-runner allow-list configuration; see [Egress Allow-List](#egress-allow-list)              |
+| `harden_runner_supplemental_allowlist` | string  | `''`               | Extra allow-list merged with `harden_runner_allowlist`; empty adds nothing                                   |
+| `harden_runner_supplemental_unpinned`  | boolean | `false`            | Let the supplemental list omit `@ref` and follow its default branch (lists in the caller's own organisation) |
+| `harden_runner_extra_endpoints`        | string  | `''`               | Inline `host[:port]` endpoints merged into the allow-list for short-lived fixes                              |
+| `gerrit_refspec`                       | string  | `''`               | Gerrit refspec of the change under test                                                                      |
+| `gerrit_project`                       | string  | `''`               | Gerrit project name                                                                                          |
+| `gerrit_branch`                        | string  | `''`               | Gerrit target branch                                                                                         |
+| `gerrit_url`                           | string  | `''`               | Gerrit server URL; empty falls back to the `GERRIT_URL` variable                                             |
 
 <!-- markdownlint-enable MD013 -->
+
+### Egress Allow-List
+
+Both workflows run step-security harden-runner with a blocked egress
+policy. Each job loads its allow-list through
+`lfreleng-actions/harden-runner-block-action`, and five inputs, shared
+by both workflows, shape that list:
+
+- `harden_runner_egress`: `block` (the default) or `audit`.
+- `harden_runner_allowlist`: the baseline list, by default the
+  organisation list pinned to a release.
+- `harden_runner_supplemental_allowlist`: a second list, in the same
+  coordinate grammar as `harden_runner_allowlist`, merged with the
+  baseline.
+- `harden_runner_supplemental_unpinned`: lets the supplemental list
+  omit `@ref` and follow its default branch.
+- `harden_runner_extra_endpoints`: `host[:port]` tokens, separated by
+  spaces or newlines, merged into the list.
+
+An organisation that needs endpoints beyond the baseline keeps them in
+its own list. An ONAP caller, for example, follows its own list on its
+default branch:
+
+```yaml
+    with:
+      harden_runner_supplemental_allowlist: 'onap//'
+      harden_runner_supplemental_unpinned: true
+```
+
+A list may go unpinned when it lives in the caller's own
+organisation. A list from another organisation must carry an `@ref`
+pin, even with `harden_runner_supplemental_unpinned` set.
+
+Naming a supplemental list makes it a dependency: the workflows set
+the action's `supplemental_required` whenever
+`harden_runner_supplemental_allowlist` is non-empty, so a list that
+does not resolve fails the job at load time, not at the first blocked
+connection.
+
+For an unpinned list, the action's `supplemental_source` and
+`supplemental_sha` outputs record which list and which commit each job
+loaded. They are the audit trail for a list that moves between runs.
+
+`harden_runner_extra_endpoints` suits a short-lived fix, such as
+unblocking a build while an endpoint waits to join a list:
+
+```yaml
+    with:
+      harden_runner_extra_endpoints: 'registry.nordix.org:443'
+```
+
+The lasting fix is adding the endpoint to the organisation's list,
+after which the caller drops the inline entry.
 
 ### Build/Test Usage (GitHub)
 
@@ -385,6 +441,16 @@ pull requests against pinned fixture repositories (a Go fixture project
 and an ONAP monorepo subdirectory). The release workflow needs a signed
 tag-push context, so consuming repositories exercise it through their
 own release cycles.
+
+Each leg also passes the [egress allow-list](#egress-allow-list)
+inputs in a form that grants nothing new: `lfreleng-actions//`
+unpinned resolves to the organisation list the baseline already loads,
+and `github.com:443` already sits on that list.
+
+`bash tests/test-harden-runner-inputs.sh` checks that both reusable
+workflows expose the five `harden_runner_*` inputs and pass each one
+through to every block-action step; a prek hook runs it on every
+workflow change.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/go-workflows/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/go-workflows/main.svg
