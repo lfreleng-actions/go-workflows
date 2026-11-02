@@ -98,6 +98,6 @@ jobs:
       # 'lfreleng-actions//' resolves to the organisation list itself,
       # which de-duplication absorbs. The organisation list already
       # carries github.com:443, so the action reports it as redundant.
-      harden_runner_supplemental_allowlist: 'lfreleng-actions//@6d4a65c5601afd6c2fbe52bda4b0024b132f265d'  # v0.19.0
+      harden_runner_supplemental_allowlist: 'lfreleng-actions//'
       harden_runner_supplemental_unpinned: true
       harden_runner_extra_endpoints: 'github.com:443'
