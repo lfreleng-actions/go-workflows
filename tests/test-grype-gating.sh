@@ -69,7 +69,8 @@ CHECKOUT_ACTION = "actions/checkout"
 UPLOAD_ACTION = "actions/upload-artifact"
 DOWNLOAD_ACTION = "actions/download-artifact"
 SIDECAR = "dependency-change.json"
-ARTEFACT = "sbom-files"
+# The per-call suffix is checked in tests/test-artifact-suffix.sh.
+ARTEFACT = "sbom-files${{ env.ARTIFACT_SUFFIX }}"
 VALIDATE_STEP = "Validate Grype policy inputs"
 
 # name -> (type, default, grype-scan-action input)

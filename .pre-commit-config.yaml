@@ -191,3 +191,18 @@ repos:
         pass_filenames: false
         # yamllint disable-line rule:line-length
         files: '^(\.github/workflows/[^/]+\.yaml|tests/test-grype-gating\.sh)$'
+
+  # Drift check for the per-call artefact names: the artifact_suffix
+  # input, the ARTIFACT_SUFFIX env it feeds, every SBOM, Grype, CBOM and
+  # test artefact site appending it, and testing.yaml passing a distinct
+  # suffix per matrix leg.
+  - repo: local
+    hooks:
+      - id: artifact-suffix
+        name: Artefact suffix wiring check
+        entry: bash tests/test-artifact-suffix.sh
+        language: python
+        additional_dependencies: ['pyyaml==6.0.2']
+        pass_filenames: false
+        # yamllint disable-line rule:line-length
+        files: '^(\.github/workflows/[^/]+\.yaml|tests/test-artifact-suffix\.sh)$'

@@ -208,6 +208,7 @@ Fixing it needs explicit metadata inputs on `cbom-action`.
 | `cbom_exclude`                         | string  | `''`               | Comma-separated Java regex patterns to exclude; empty skips test sources                                     |
 | `cbom_module_cboms`                    | boolean | `true`             | Emit a per-module CBOM alongside the consolidated one                                                        |
 | `cbom_empty_cboms`                     | boolean | `true`             | Write CBOM files even when the scan finds no cryptographic assets                                            |
+| `artifact_suffix`                      | string  | `''`               | Appended as `-<value>` to SBOM, Grype, CBOM and test artefact names; distinct per call in one run            |
 | `build_timeout_minutes`                | number  | `10`               | Timeout (minutes) for the build job (release workflow default: `12`)                                         |
 | `test_timeout_minutes`                 | number  | `15`               | Timeout (minutes) for the tests job                                                                          |
 | `audit_timeout_minutes`                | number  | `10`               | Timeout (minutes) for the audit, SBOM and Grype jobs                                                         |
@@ -521,6 +522,11 @@ is `true`. It runs apart from `testing.yaml` because both call
 build-test against the same fixture, and `upload-artifact` rejects a
 second artefact of a name already uploaded in a run.
 
+The `testing.yaml` legs call build-test in one run, so each passes its
+matrix name as `artifact_suffix`. Without it the legs share the
+`sbom-files` name and a leg's Grype job can download and gate on
+another leg's SBOM.
+
 Each leg also passes the [egress allow-list](#egress-allow-list)
 inputs in a form that grants nothing new: `lfreleng-actions//`
 unpinned resolves to the organisation list the baseline already loads,
@@ -538,6 +544,13 @@ the `sbom-files` upload, every policy input reaching
 `grype-scan-action`, and the `gerrit-validate` step rejecting each
 invalid value by running the step's own script. A prek hook and a
 `testing.yaml` job both run it.
+
+`bash tests/test-artifact-suffix.sh` checks that both reusable
+workflows take `artifact_suffix`, append it at every upload and
+download of the SBOM, Grype, CBOM and test artefacts, and reject an
+invalid value in `gerrit-validate`, and that each `testing.yaml` leg
+passes a distinct suffix. A prek hook and a `testing.yaml` job both
+run it.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/go-workflows/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/go-workflows/main.svg
