@@ -299,6 +299,19 @@ on:
         type: boolean
         default: true
 
+      # --- Artefact naming ---
+      artifact_suffix:
+        description: >-
+          Suffix appended, after a hyphen, to the names of the SBOM,
+          Grype, CBOM and test artefacts this workflow uploads. Set a
+          distinct value on each call when a caller runs this workflow
+          more than once in one run (a matrix), so no call downloads
+          another's SBOM. Letters, digits, '.', '_' and '-' only;
+          empty keeps the unsuffixed names.
+        required: false
+        type: string
+        default: ''
+
       # --- Job timeouts ---
       build_timeout_minutes:
         description: 'Timeout (minutes) for the build job'
@@ -403,6 +416,14 @@ on:
 
 permissions: {}
 
+# '-<artifact_suffix>', or empty when the input is unset so the
+# artefact names stay as they were. Every upload and download of a
+# per-call artefact appends it; tests/test-artifact-suffix.sh checks
+# each site.
+env:
+  # yamllint disable-line rule:line-length
+  ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix != '' && format('-{0}', inputs.artifact_suffix) || '' }}
+
 jobs:
   gerrit-validate:
     name: 'Validate Workflow Inputs'
@@ -490,6 +511,20 @@ jobs:
             fi
           done
           exit "${error}"
+
+      - name: 'Validate artifact_suffix input'
+        shell: bash
+        env:
+          ARTIFACT_SUFFIX_INPUT: ${{ inputs.artifact_suffix }}
+        run: |
+          # The suffix lands in artefact names, which upload-artifact
+          # restricts; the same character set as grype-scan-action's
+          # output-prefix keeps every consumer of the name valid
+          if [[ ! "${ARTIFACT_SUFFIX_INPUT}" =~ ^[A-Za-z0-9._-]*$ ]]; then
+            echo "::error::Invalid artifact_suffix input:" \
+              "${ARTIFACT_SUFFIX_INPUT}"
+            exit 1
+          fi
 
       - name: 'Validate Grype policy inputs'
         shell: bash
@@ -904,7 +939,8 @@ jobs:
           # Coverage artifact upload requires coverage; unique name per
           # matrix leg to avoid artifact name collisions.
           artifact_upload: ${{ inputs.coverage }}
-          artifact_name: 'test-coverage-go-${{ matrix.go-version }}'
+          # yamllint disable-line rule:line-length
+          artifact_name: 'test-coverage-go-${{ matrix.go-version }}${{ env.ARTIFACT_SUFFIX }}'
 
       # Unique artifact name per matrix leg to avoid collisions
       - name: 'Upload test artefacts'
@@ -912,7 +948,8 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: go-test-results-${{ matrix.go-version }}
+          # yamllint disable-line rule:line-length
+          name: go-test-results-${{ matrix.go-version }}${{ env.ARTIFACT_SUFFIX }}
           path: ${{ inputs.path_prefix }}/${{ inputs.test_artifact_path }}
           retention-days: 7
           if-no-files-found: warn
@@ -1161,7 +1198,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: sbom-files
+          name: sbom-files${{ env.ARTIFACT_SUFFIX }}
           # Glob matches whichever SBOM formats the generator produced.
           # The dependency-change sidecar rides along as a file, never
           # a job output: matrix jobs collapse outputs to one value, and
@@ -1228,7 +1265,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: sbom-files
+          name: sbom-files${{ env.ARTIFACT_SUFFIX }}
 
       # Setting the grype_permit_fail input, or the NO_BLOCK_AUDIT_FAIL
       # repository variable (an org/repo-wide override that soft-fails
@@ -1259,6 +1296,7 @@ jobs:
           remediation-window-days: ${{ inputs.grype_remediation_window_days }}
           # yamllint disable-line rule:line-length
           remediation-window-start: ${{ inputs.grype_remediation_window_start }}
+          artifact-name: 'grype-scan-results${{ env.ARTIFACT_SUFFIX }}'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   # Informational leg. Nothing downstream reads the CBOM, so this job
@@ -1391,7 +1429,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: cbom-files
+          name: cbom-files${{ env.ARTIFACT_SUFFIX }}
           # Absolute glob under runner temp, covering the consolidated
           # CBOM and, when cbom_module_cboms is on, the per-module files
           # beside it. upload-artifact roots the archive at the common

@@ -11,7 +11,8 @@
 # This lane runs apart from testing.yaml on purpose. It calls the same
 # workflow against the same fixture as that matrix, and build-test
 # names its artefacts (sbom-files, cbom-files, grype-scan-results and
-# the per-Go-version test results) without a per-caller suffix.
+# the per-Go-version test results) without a per-caller suffix unless
+# the caller sets artifact_suffix, which this lane does not.
 # upload-artifact rejects a second artefact of a name already uploaded
 # in a run, so a second invocation in the same run would fail at the
 # upload and the assertion would never run. A separate run keeps this
