@@ -69,8 +69,10 @@ CHECKOUT_ACTION = "actions/checkout"
 UPLOAD_ACTION = "actions/upload-artifact"
 DOWNLOAD_ACTION = "actions/download-artifact"
 SIDECAR = "dependency-change.json"
-# The per-call suffix is checked in tests/test-artifact-suffix.sh.
+# The per-call suffix and the download's binding to the upload by ID
+# are checked in tests/test-artifact-suffix.sh.
 ARTEFACT = "sbom-files${{ env.ARTIFACT_SUFFIX }}"
+ARTEFACT_ID = "${{ needs.sbom.outputs.sbom_artifact_id }}"
 VALIDATE_STEP = "Validate Grype policy inputs"
 
 # name -> (type, default, grype-scan-action input)
@@ -159,8 +161,9 @@ def check_input(inputs, name, kind, default, problems):
 def check_grype_step(doc, verify, problems):
     steps = steps_of(doc, "grype")
     _, download = find_step(steps, DOWNLOAD_ACTION)
-    if download is None or (download.get("with") or {}).get("name") != ARTEFACT:
-        problems.append(f"jobs.grype does not download {ARTEFACT}")
+    if download is None or \
+            (download.get("with") or {}).get("artifact-ids") != ARTEFACT_ID:
+        problems.append(f"jobs.grype does not download {ARTEFACT_ID}")
     index, step = find_step(steps, GRYPE_ACTION)
     if step is None:
         problems.append(f"jobs.grype does not call {GRYPE_ACTION}")

@@ -524,8 +524,11 @@ second artefact of a name already uploaded in a run.
 
 The `testing.yaml` legs call build-test in one run, so each passes its
 matrix name as `artifact_suffix`. Without it the legs share the
-`sbom-files` name and a leg's Grype job can download and gate on
-another leg's SBOM.
+`sbom-files` name and `upload-artifact` rejects the second upload. The
+`grype` job does not rely on the name either way: the `sbom` job
+exports its upload's `artifact-id` as the `sbom_artifact_id` output
+and `grype` downloads by `artifact-ids`, so a same-named artefact from
+another call of the workflow in the same run is never the one scanned.
 
 Each leg also passes the [egress allow-list](#egress-allow-list)
 inputs in a form that grants nothing new: `lfreleng-actions//`
@@ -547,10 +550,11 @@ invalid value by running the step's own script. A prek hook and a
 
 `bash tests/test-artifact-suffix.sh` checks that both reusable
 workflows take `artifact_suffix`, append it at every upload and
-download of the SBOM, Grype, CBOM and test artefacts, and reject an
-invalid value in `gerrit-validate`, and that each `testing.yaml` leg
-passes a distinct suffix. A prek hook and a `testing.yaml` job both
-run it.
+download of the SBOM, Grype, CBOM and test artefacts, bind the `grype`
+job's SBOM download to the `sbom` job's upload by artefact ID rather
+than by name, and reject an invalid suffix in `gerrit-validate`, and
+that each `testing.yaml` leg passes a distinct suffix. A prek hook and
+a `testing.yaml` job both run it.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/go-workflows/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/go-workflows/main.svg

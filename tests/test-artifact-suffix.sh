@@ -4,8 +4,10 @@
 #
 # Checks that the reusable workflows name their per-call artefacts
 # with the artifact_suffix input, so a caller that runs a workflow
-# more than once in one run (a matrix) gets distinct names and no
-# call downloads another call's SBOM.
+# more than once in one run (a matrix) gets distinct names, and that
+# each grype job downloads the SBOM its own sbom job uploaded, by
+# artefact ID, so no call scans another call's SBOM even when the
+# suffix is omitted and the names collide.
 #
 # Static, from the parsed YAML:
 #   - both reusable workflows take artifact_suffix (string, default
@@ -15,6 +17,9 @@
 #     cbom-files, go-test-results, test-coverage-go,
 #     grype-scan-results) appends ${{ env.ARTIFACT_SUFFIX }}, and the
 #     expected sites are all present;
+#   - the sbom job exports its upload step's artifact-id output as
+#     sbom_artifact_id, and every download-artifact step in the grype
+#     job passes it as artifact-ids, with no name or pattern;
 #   - testing.yaml passes a distinct, valid suffix on each matrix leg.
 #
 # Dynamic: the 'Validate artifact_suffix input' step of gerrit-validate
@@ -71,6 +76,13 @@ PER_CALL = (
     "sbom-files", "cbom-files", "go-test-results", "test-coverage-go",
     "grype-scan-results",
 )
+SBOM_JOB = "sbom"
+GRYPE_JOB = "grype"
+SBOM_OUTPUT = "sbom_artifact_id"
+SBOM_ID = "${{ needs.%s.outputs.%s }}" % (SBOM_JOB, SBOM_OUTPUT)
+# download-artifact selects by exactly one of these; a grype job may
+# use only artifact-ids.
+SELECTORS = ("name", "pattern", "artifact-ids")
 
 # workflow -> [(job, action, with-key, expected name)]
 SITES = {
@@ -80,14 +92,12 @@ SITES = {
         ("tests", UPLOAD, "name",
          "go-test-results-${{ matrix.go-version }}" + SUFFIX),
         ("sbom", UPLOAD, "name", "sbom-files" + SUFFIX),
-        ("grype", DOWNLOAD, "name", "sbom-files" + SUFFIX),
         ("grype", GRYPE, "artifact-name", "grype-scan-results" + SUFFIX),
         ("cbom", UPLOAD, "name", "cbom-files" + SUFFIX),
     ],
     "build-test-release.yaml": [
         ("tests", UPLOAD, "name", "go-test-results" + SUFFIX),
         ("sbom", UPLOAD, "name", "sbom-files" + SUFFIX),
-        ("grype", DOWNLOAD, "name", "sbom-files" + SUFFIX),
         ("grype", GRYPE, "artifact-name", "grype-scan-results" + SUFFIX),
         ("cbom", UPLOAD, "name", "cbom-files" + SUFFIX),
         ("attach-artefacts", DOWNLOAD, "name", "sbom-files" + SUFFIX),
@@ -131,6 +141,50 @@ def validate_step(doc):
     return None
 
 
+def sbom_upload(doc):
+    """Return the sbom job's upload step for the SBOM artefact."""
+    job = jobs_of(doc).get(SBOM_JOB) or {}
+    for step in job.get("steps") or []:
+        if action_of(step) == UPLOAD and \
+                ((step or {}).get("with") or {}).get("name") == \
+                "sbom-files" + SUFFIX:
+            return step
+    return None
+
+
+def check_binding(doc, problems):
+    """The grype job must download the SBOM its sbom job uploaded."""
+    upload = sbom_upload(doc)
+    if upload is None:
+        return  # SITES already reports the missing upload
+    step_id = upload.get("id")
+    wanted = "${{ steps.%s.outputs.artifact-id }}" % step_id
+    outputs = (jobs_of(doc).get(SBOM_JOB) or {}).get("outputs") or {}
+    if not step_id or outputs.get(SBOM_OUTPUT) != wanted:
+        problems.append(
+            f"jobs.{SBOM_JOB}.outputs.{SBOM_OUTPUT} is not the upload"
+            " step's artifact-id"
+        )
+    job = jobs_of(doc).get(GRYPE_JOB) or {}
+    needs = job.get("needs") or []
+    if SBOM_JOB not in ([needs] if isinstance(needs, str) else needs):
+        problems.append(f"jobs.{GRYPE_JOB} does not need {SBOM_JOB}")
+    downloads = 0
+    for index, step in enumerate(job.get("steps") or []):
+        if action_of(step) != DOWNLOAD:
+            continue
+        downloads += 1
+        where = f"jobs.{GRYPE_JOB}.steps[{index}].with"
+        given = (step or {}).get("with") or {}
+        for key in SELECTORS:
+            if key != "artifact-ids" and key in given:
+                problems.append(f"{where}.{key} selects by {key}, not by ID")
+        if given.get("artifact-ids") != SBOM_ID:
+            problems.append(f"{where}.artifact-ids is not {SBOM_ID}")
+    if not downloads:
+        problems.append(f"jobs.{GRYPE_JOB} has no {DOWNLOAD} step")
+
+
 def check_doc(name, doc):
     """Return the list of problems in one reusable workflow."""
     problems = []
@@ -166,6 +220,7 @@ def check_doc(name, doc):
             problems.append(
                 f"jobs.{job_id} has no {action} step with {key}: {value!r}"
             )
+    check_binding(doc, problems)
 
     step = validate_step(doc)
     if step is None:
@@ -267,6 +322,44 @@ def mutants(name, doc):
         d = copy.deepcopy(doc)
         d["jobs"][job_id]["steps"].remove(find(d, job_id, action, key, value))
         yield f"{job_id} {key} site removed", d
+
+    def download(d):
+        for step in d["jobs"][GRYPE_JOB]["steps"]:
+            if action_of(step) == DOWNLOAD:
+                return step
+        raise LookupError((GRYPE_JOB, DOWNLOAD))
+
+    d = copy.deepcopy(doc)
+    del d["jobs"][SBOM_JOB]["outputs"][SBOM_OUTPUT]
+    yield "sbom job drops the artefact ID output", d
+    d = copy.deepcopy(doc)
+    d["jobs"][SBOM_JOB]["outputs"][SBOM_OUTPUT] = \
+        "${{ steps.sbom.outputs.artifact-id }}"
+    yield "sbom job reads the ID from another step", d
+    d = copy.deepcopy(doc)
+    del sbom_upload(d)["id"]
+    yield "sbom upload step loses its id", d
+    d = copy.deepcopy(doc)
+    d["jobs"][GRYPE_JOB]["needs"] = "build"
+    yield "grype job no longer needs sbom", d
+    d = copy.deepcopy(doc)
+    download(d)["with"] = {"name": "sbom-files" + SUFFIX}
+    yield "grype downloads by name", d
+    d = copy.deepcopy(doc)
+    download(d)["with"]["name"] = "sbom-files" + SUFFIX
+    yield "grype downloads by name and ID", d
+    d = copy.deepcopy(doc)
+    download(d)["with"] = {"pattern": "sbom-files*"}
+    yield "grype downloads by pattern", d
+    d = copy.deepcopy(doc)
+    download(d)["with"]["artifact-ids"] = "${{ needs.sbom.outputs.id }}"
+    yield "grype downloads another output", d
+    d = copy.deepcopy(doc)
+    del download(d)["with"]["artifact-ids"]
+    yield "grype downloads every artefact", d
+    d = copy.deepcopy(doc)
+    d["jobs"][GRYPE_JOB]["steps"].remove(download(d))
+    yield "grype download removed", d
     d = copy.deepcopy(doc)
     validate_step(d)["if"] = "inputs.artifact_suffix != ''"
     yield "validate step conditional", d
