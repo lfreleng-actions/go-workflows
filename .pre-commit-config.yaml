@@ -176,3 +176,18 @@ repos:
         pass_filenames: false
         # yamllint disable-line rule:line-length
         files: '^(\.github/workflows/[^/]+\.yaml|tests/test-harden-runner-inputs\.sh)$'
+
+  # Drift check for the change-scoped Grype gating: the grype_* policy
+  # inputs, the pinned dependency-change-action step and the checkout
+  # depth it needs, the sidecar in the sbom-files artefact, and the
+  # gerrit-validate step's rejection of each invalid value.
+  - repo: local
+    hooks:
+      - id: grype-gating
+        name: Grype gating wiring check
+        entry: bash tests/test-grype-gating.sh
+        language: python
+        additional_dependencies: ['pyyaml==6.0.2']
+        pass_filenames: false
+        # yamllint disable-line rule:line-length
+        files: '^(\.github/workflows/[^/]+\.yaml|tests/test-grype-gating\.sh)$'

@@ -191,6 +191,63 @@ on:
         required: false
         type: boolean
         default: false
+      # Change-scoped gating. With 'dependencies-changed' the sbom job
+      # runs dependency-change-action and the Grype gate arms only when
+      # the change touched the dependency chain; an unresolved result
+      # (no sidecar) gates, as 'always' does. The detection rules, the
+      # file list per ecosystem and the base selection are the action's
+      # contract: https://github.com/lfreleng-actions/dependency-change-action
+      grype_gate_when:
+        description: >-
+          When the Grype scan gates: 'always', or 'dependencies-changed'
+          to gate only when the change under test touched the Go
+          dependency chain (go.mod, go.sum, vendor). Findings are
+          reported either way.
+        required: false
+        type: string
+        default: 'always'
+      grype_dependency_policy:
+        description: >-
+          Which findings gate: 'all', or 'declared' for direct
+          dependencies only, with transitive ones held to
+          grype_transitive_fail_on. Syft emits no dependency graph for
+          Go yet, so 'declared' treats every Go finding as declared.
+        required: false
+        type: string
+        default: 'declared'
+      grype_transitive_fail_on:
+        description: >-
+          Severity threshold for transitive findings under the
+          'declared' policy: none, negligible, low, medium, high or
+          critical.
+        required: false
+        type: string
+        default: 'critical'
+      grype_only_fixed:
+        description: >-
+          Gate only on findings with a published fix version. A finding
+          nobody can act on is reported, not blocking.
+        required: false
+        type: boolean
+        default: true
+      grype_remediation_window_days:
+        description: >-
+          Days a finding stays a warning after its fix was published on
+          an unarmed 'dependencies-changed' run, before it gates as on
+          an armed run. Empty disables the window; no effect on
+          'always' runs.
+        required: false
+        type: string
+        default: ''
+      grype_remediation_window_start:
+        description: >-
+          Optional floor (YYYY-MM-DD) on the remediation window: a fix
+          published before this date counts from it rather than from
+          publication. Empty sets no floor; only the days input turns
+          the window on.
+        required: false
+        type: string
+        default: ''
 
       # --- CBOM (informational) ---
       # A CBOM records which cryptographic algorithms, key sizes, modes
@@ -336,6 +393,13 @@ on:
         required: false
         type: string
         default: ''
+    outputs:
+      grype_gate_active:
+        description: >-
+          Whether the Grype gate was armed ('true' or 'false'); empty
+          when the scan did not run. Under grype_gate_when
+          'dependencies-changed' this is what the self-test asserts.
+        value: ${{ jobs.grype.outputs.gate_active }}
 
 permissions: {}
 
@@ -343,7 +407,8 @@ jobs:
   gerrit-validate:
     name: 'Validate Workflow Inputs'
     # Fails fast with a clear message on invalid workflow inputs: the
-    # test artefact path, job timeouts, and the Gerrit parameters (when
+    # test artefact path, job timeouts, Grype gating policy, and the
+    # Gerrit parameters (when
     # gerrit_refspec is set without the project/branch the Gerrit
     # checkout path also requires). The build-chain root job depends on
     # this, so invalid inputs stop the pipeline early and cleanly. This
@@ -424,6 +489,63 @@ jobs:
               error=1
             fi
           done
+          exit "${error}"
+
+      - name: 'Validate Grype policy inputs'
+        shell: bash
+        env:
+          GRYPE_GATE_WHEN: ${{ inputs.grype_gate_when }}
+          GRYPE_DEPENDENCY_POLICY: ${{ inputs.grype_dependency_policy }}
+          GRYPE_TRANSITIVE_FAIL_ON: ${{ inputs.grype_transitive_fail_on }}
+          # yamllint disable-line rule:line-length
+          GRYPE_REMEDIATION_WINDOW_DAYS: ${{ inputs.grype_remediation_window_days }}
+          # yamllint disable-line rule:line-length
+          GRYPE_REMEDIATION_WINDOW_START: ${{ inputs.grype_remediation_window_start }}
+        run: |
+          # Reject a typo in the gating policy here, in seconds, rather
+          # than in grype-scan-action after the build. The values
+          # mirror the action's own enumerations; a window start must
+          # be a real calendar date, and whether it lies in the future
+          # is left to the action
+          error=0
+          case "${GRYPE_GATE_WHEN}" in
+            always|dependencies-changed) ;;
+            *)
+              echo "::error::Invalid grype_gate_when input:" \
+                "${GRYPE_GATE_WHEN}"
+              error=1 ;;
+          esac
+          case "${GRYPE_DEPENDENCY_POLICY}" in
+            all|declared) ;;
+            *)
+              echo "::error::Invalid grype_dependency_policy input:" \
+                "${GRYPE_DEPENDENCY_POLICY}"
+              error=1 ;;
+          esac
+          case "${GRYPE_TRANSITIVE_FAIL_ON}" in
+            none|negligible|low|medium|high|critical) ;;
+            *)
+              echo "::error::Invalid grype_transitive_fail_on input:" \
+                "${GRYPE_TRANSITIVE_FAIL_ON}"
+              error=1 ;;
+          esac
+          if [[ ! "${GRYPE_REMEDIATION_WINDOW_DAYS}" =~ ^[0-9]*$ ]]; then
+            echo "::error::Invalid grype_remediation_window_days input:" \
+              "${GRYPE_REMEDIATION_WINDOW_DAYS}"
+            error=1
+          fi
+          start="${GRYPE_REMEDIATION_WINDOW_START}"
+          # The regex fixes the shape; GNU date rejects an impossible
+          # day such as 2026-02-31, and the comparison guards against
+          # a date that normalises instead
+          if [[ ! "${start}" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})?$ ]] ||
+            { [ -n "${start}" ] &&
+              [ "$(date -u -d "${start}" +%F 2>/dev/null)" != "${start}" ]
+            }; then
+            echo "::error::Invalid grype_remediation_window_start input:" \
+              "${start}"
+            error=1
+          fi
           exit "${error}"
 
       - name: 'Require Gerrit project, branch and URL'
@@ -1000,7 +1122,28 @@ jobs:
         with:
           repository: ${{ inputs.repository || github.repository }}
           ref: ${{ inputs.ref }}
+          # Depth 2 so dependency-change-action can diff the change
+          # under test against its parent; at depth 1 every pull
+          # request would be unresolved and gate. The Gerrit checkout
+          # above defaults to 2. tests/test-grype-gating.sh guards this.
+          fetch-depth: 2
           persist-credentials: false
+
+      # Writes dependency-change.json when the change touched the Go
+      # dependency chain (or did not), and nothing when the base cannot
+      # be resolved; the Grype job then gates as on an 'always' run.
+      # The step runs only when the sidecar has a reader.
+      - name: 'Detect dependency changes'
+        id: dependency-change
+        # yamllint disable-line rule:line-length
+        if: inputs.grype_enabled && inputs.grype_gate_when == 'dependencies-changed'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/dependency-change-action@257928b15e4e6a5cc5a888435be59b058055c4e1  # v0.0.1
+        with:
+          ecosystems: 'go'
+          path-prefix: ${{ inputs.path_prefix }}
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          output: 'dependency-change.json'
 
       # Emits sbom-cyclonedx.* at the workspace root (the Grype job
       # contract: the upload glob below and the downstream scan both
@@ -1019,8 +1162,16 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: sbom-files
-          # Glob matches whichever SBOM formats the generator produced
-          path: sbom-cyclonedx.*
+          # Glob matches whichever SBOM formats the generator produced.
+          # The dependency-change sidecar rides along as a file, never
+          # a job output: matrix jobs collapse outputs to one value, and
+          # a file transfers unchanged between workflow families. Its
+          # absence (detection skipped or unresolved) is expected and
+          # must not fail the upload; the SBOM alone satisfies the
+          # if-no-files-found check.
+          path: |
+            sbom-cyclonedx.*
+            dependency-change.json
           retention-days: 45
           # Fail fast: the downstream Grype job requires this artifact,
           # so a missing/misnamed SBOM must surface here, not later
@@ -1046,6 +1197,8 @@ jobs:
     timeout-minutes: ${{ inputs.audit_timeout_minutes }}
     permissions:
       contents: read
+    outputs:
+      gate_active: ${{ steps.grype-audit.outputs.gate-active }}
     steps:
       - name: 'Load egress allow-list'
         # yamllint disable-line rule:line-length
@@ -1083,6 +1236,11 @@ jobs:
       # propagation so pull requests
       # can proceed when blocked by newly discovered CVEs in transitive
       # dependencies.
+      #
+      # dependency-change.json arrives beside the SBOM when the sbom job
+      # ran detection and resolved a base. When the file is absent the
+      # action leaves the signal unresolved and gates, which is the
+      # 'always' behaviour, so naming it unconditionally is safe.
       - name: 'Grype audit SBOM'
         id: grype-audit
         # yamllint disable-line rule:line-length
@@ -1092,6 +1250,15 @@ jobs:
           fail-on: ${{ inputs.grype_fail_on }}
           # yamllint disable-line rule:line-length
           permit-fail: ${{ inputs.grype_permit_fail || vars.NO_BLOCK_AUDIT_FAIL == 'true' }}
+          gate-when: ${{ inputs.grype_gate_when }}
+          dependency-change-manifest: 'dependency-change.json'
+          dependency-policy: ${{ inputs.grype_dependency_policy }}
+          transitive-fail-on: ${{ inputs.grype_transitive_fail_on }}
+          only-fixed: ${{ inputs.grype_only_fixed }}
+          # yamllint disable-line rule:line-length
+          remediation-window-days: ${{ inputs.grype_remediation_window_days }}
+          # yamllint disable-line rule:line-length
+          remediation-window-start: ${{ inputs.grype_remediation_window_start }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   # Informational leg. Nothing downstream reads the CBOM, so this job

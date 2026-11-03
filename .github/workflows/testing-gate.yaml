@@ -1,0 +1,76 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Runs the Go fixture through build-test with grype_gate_when set to
+# 'dependencies-changed'. The fixture pins a commit of another
+# repository, so dependency-change-action cannot resolve this pull
+# request's base against it and writes no sidecar; the assertion that
+# follows proves that unresolved path gates (gate-active true).
+#
+# This lane runs apart from testing.yaml on purpose. It calls the same
+# workflow against the same fixture as that matrix, and build-test
+# names its artefacts (sbom-files, cbom-files, grype-scan-results and
+# the per-Go-version test results) without a per-caller suffix.
+# upload-artifact rejects a second artefact of a name already uploaded
+# in a run, so a second invocation in the same run would fail at the
+# upload and the assertion would never run. A separate run keeps this
+# lane's uploads to itself without renaming the artefacts consumers
+# download.
+#
+# The reusable workflow is referenced with the self-repository form
+# ('$/'), so the workflow under test is the one this branch defines.
+name: 'Testing: Grype Gate 🧪'
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  # Nothing is permitted to fail: the unresolved path gates, so this
+  # lane behaves like the 'always' lane in testing.yaml and must stay
+  # green.
+  build-test-gate:
+    name: 'Build/Test (test-go-project, gate on dependency change)'
+    permissions:
+      contents: read
+      pull-requests: read  # repository-metadata-action queries PR data
+    uses: $/.github/workflows/build-test.yaml
+    with:
+      repository: 'lfreleng-actions/test-go-project'
+      ref: '02a24ba15c4687eb443bf407b5fc0b4d099ab86f' # v0.1.0
+      grype_gate_when: 'dependencies-changed'
+
+  assert-gate:
+    name: 'Assert Unresolved Change Gates'
+    needs: build-test-gate
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: 'Check gate-active'
+        shell: bash
+        env:
+          GATE_ACTIVE: ${{ needs.build-test-gate.outputs.grype_gate_active }}
+        run: |
+          # With no sidecar the action must leave the signal unresolved
+          # and arm the gate; anything else means a change that leaves
+          # the dependency chain alone could pass with the gate off
+          # even when detection never ran
+          if [ "${GATE_ACTIVE}" != 'true' ]; then
+            echo "::error::grype_gate_active is '${GATE_ACTIVE}'," \
+              "expected 'true' on the unresolved path"
+            exit 1
+          fi
+          echo "Unresolved dependency change gates ✅"

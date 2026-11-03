@@ -65,13 +65,66 @@ go-metadata -> build -> { tests | go-lint | audit | sbom -> grype | cbom }
 - `audit` runs govulncheck (plus optional gosec and staticcheck) with
   go-audit-action
 - `sbom` generates a CycloneDX SBOM with sbom-action, then `grype`
-  scans it for known vulnerabilities
+  scans it for known vulnerabilities; with `grype_gate_when:
+  dependencies-changed` the `sbom` job also records whether the change
+  touched the dependency chain, and the gate arms when it did (see
+  [Change-Scoped Grype Gating](#change-scoped-grype-gating))
 - `cbom` generates a CycloneDX Cryptography Bill of Materials with
   cbom-action; informational, and it never fails the run (see below)
 
 The `repository-metadata` job runs in parallel as an informational
 step, and the `gerrit-validate` job fails fast on inconsistent Gerrit
-inputs.
+inputs and on an invalid Grype gating policy.
+
+### Change-Scoped Grype Gating
+
+By default the Grype scan gates on every run (`grype_gate_when:
+always`). Setting `grype_gate_when: dependencies-changed` makes the
+gate opt-in per change: the `sbom` job runs
+[dependency-change-action][] against the change under test, writes its
+verdict to `dependency-change.json` beside the SBOM in the `sbom-files`
+artefact, and the `grype` job reads it through
+`dependency-change-manifest`. A change that left `go.mod`, `go.sum` and
+`vendor/` alone then reports findings as warnings instead of failing.
+The action's README defines the file list per ecosystem, how it picks
+the base commit, the fail-closed contract and the symbolic-link rule;
+this workflow passes the `go` preset and adds no rules of its own.
+
+The detection fails closed. When the action cannot resolve a base it
+writes no sidecar, and `grype-scan-action` then gates as on an
+`always` run, so a misconfiguration never loosens the gate.
+That needs the `sbom` job's checkout at `fetch-depth: 2` (the Gerrit
+checkout defaults to 2), which `tests/test-grype-gating.sh` guards.
+
+Two inputs shape what an armed gate blocks on. `grype_only_fixed`
+defaults to `true`: the gate blocks on CVEs with a known, published
+fix version and nothing else, so a finding nobody can act on appears
+in the report without blocking. `grype_dependency_policy: declared`
+(the default) holds transitive findings to `grype_transitive_fail_on`
+(default `critical`) rather than `grype_fail_on`. Syft emits no
+dependency graph for Go yet,
+so for a Go module every finding counts as declared until
+[sbom-action#45][] lands; on this family the relief comes from
+`grype_gate_when`.
+
+The remediation window bounds that relief in time. With
+`grype_remediation_window_days` set and a change that left the
+dependency chain alone, a finding stays a warning for that number of
+days after its fix became available, then gates as on an armed run.
+The days value alone turns the window on: empty (the default) keeps it
+off. `grype_remediation_window_start` is an optional floor on the
+start of the count: a fix published before that date counts from the
+date instead; empty (the default) sets no floor and counts every fix
+from publication, so it does not turn the window off. Neither does
+anything on `always` runs; `gerrit-validate` checks the days value is
+a whole number and the start value is a real `YYYY-MM-DD` date, and
+leaves "not in the future" to the action.
+
+The release workflow always gates: it accepts the policy inputs but
+not `grype_gate_when`, and runs no detection.
+
+[dependency-change-action]: https://github.com/lfreleng-actions/dependency-change-action
+[sbom-action#45]: https://github.com/lfreleng-actions/sbom-action/issues/45
 
 ### CBOM (informational)
 
@@ -144,6 +197,12 @@ Fixing it needs explicit metadata inputs on `cbom-action`.
 | `grype_enabled`                        | boolean | `true`             | Run the Grype scan (set false to keep the SBOM but skip the scan)                                            |
 | `grype_fail_on`                        | string  | `'medium'`         | Severity threshold that fails the Grype scan                                                                 |
 | `grype_permit_fail`                    | boolean | `false`            | Permit Grype findings without failing the job                                                                |
+| `grype_gate_when`                      | string  | `'always'`         | When the scan gates: `always`, or `dependencies-changed` (gate when the change touched the dependency chain) |
+| `grype_dependency_policy`              | string  | `'declared'`       | Findings that gate: `all`, or `declared` (transitive findings held to `grype_transitive_fail_on`)            |
+| `grype_transitive_fail_on`             | string  | `'critical'`       | Severity threshold for transitive findings under `declared` (`none`, `negligible`, `low` … `critical`)       |
+| `grype_only_fixed`                     | boolean | `true`             | Gate on findings with a published fix version and report the rest                                            |
+| `grype_remediation_window_days`        | string  | `''`               | Days a finding stays a warning after its fix on an unarmed `dependencies-changed` run; empty disables        |
+| `grype_remediation_window_start`       | string  | `''`               | Optional floor (`YYYY-MM-DD`) the window counts earlier fixes from; empty counts from publication            |
 | `cbom_enabled`                         | boolean | `true`             | Generate a CBOM (set false to skip the job); the job never fails the run                                     |
 | `cbom_languages`                       | string  | `''`               | Comma-separated languages to scan (`java`, `python`, `go`, `csharp`); empty auto-detects                     |
 | `cbom_exclude`                         | string  | `''`               | Comma-separated Java regex patterns to exclude; empty skips test sources                                     |
@@ -162,6 +221,16 @@ Fixing it needs explicit metadata inputs on `cbom-action`.
 | `gerrit_project`                       | string  | `''`               | Gerrit project name                                                                                          |
 | `gerrit_branch`                        | string  | `''`               | Gerrit target branch                                                                                         |
 | `gerrit_url`                           | string  | `''`               | Gerrit server URL; empty falls back to the `GERRIT_URL` variable                                             |
+
+<!-- markdownlint-enable MD013 -->
+
+### Build/Test Outputs
+
+<!-- markdownlint-disable MD013 -->
+
+| Name                | Description                                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `grype_gate_active` | Whether the Grype gate armed (`true`/`false`); empty when the scan did not run. Not matrix-safe.     |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -297,7 +366,8 @@ build -> attest
 The release workflow accepts the shared inputs from the build-test
 table above (except the matrix/lint inputs `go_version_matrix`,
 `lint_version` and `lint_permit_fail` — the release pipeline runs no
-lint job), plus:
+lint job — and `grype_gate_when`, because a release always gates),
+plus:
 
 <!-- markdownlint-disable MD013 -->
 
@@ -442,6 +512,15 @@ and an ONAP monorepo subdirectory). The release workflow needs a signed
 tag-push context, so consuming repositories exercise it through their
 own release cycles.
 
+`.github/workflows/testing-gate.yaml` runs the Go fixture with
+`grype_gate_when: dependencies-changed`. The fixture pins a commit of
+another repository, so the pull request's base is not an ancestor of
+it and dependency-change-action cannot resolve a base: the lane proves
+the unresolved path gates by asserting the `grype_gate_active` output
+is `true`. It runs apart from `testing.yaml` because both call
+build-test against the same fixture, and `upload-artifact` rejects a
+second artefact of a name already uploaded in a run.
+
 Each leg also passes the [egress allow-list](#egress-allow-list)
 inputs in a form that grants nothing new: `lfreleng-actions//`
 unpinned resolves to the organisation list the baseline already loads,
@@ -451,6 +530,14 @@ and `github.com:443` already sits on that list.
 workflows expose the five `harden_runner_*` inputs and pass each one
 through to every block-action step; a prek hook runs it on every
 workflow change.
+
+`bash tests/test-grype-gating.sh` checks the Grype gating wiring: the
+inputs and their defaults in both workflows, the pinned detection step
+in the `sbom` job and the `fetch-depth: 2` it needs, the sidecar in
+the `sbom-files` upload, every policy input reaching
+`grype-scan-action`, and the `gerrit-validate` step rejecting each
+invalid value by running the step's own script. A prek hook and a
+`testing.yaml` job both run it.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/go-workflows/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/go-workflows/main.svg

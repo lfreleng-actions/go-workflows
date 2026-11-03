@@ -17,6 +17,13 @@
 # a signed semver tag-push context (and creates/promotes GitHub
 # releases), which is neither available nor safe on a pull request.
 # Instantiating repos validate it through their own release cycles.
+#
+# The change-scoped Grype gate lane lives in testing-gate.yaml, in its
+# own run: it calls the same workflow against the same fixture, and
+# upload-artifact rejects a second artefact of a name already uploaded
+# in a run. The wiring itself (inputs, pins, checkout depth, sidecar
+# transport and gerrit-validate rejections) is checked statically by
+# tests/test-grype-gating.sh in the grype-gating-checks job below.
 name: 'Testing 🧪'
 
 # yamllint disable-line rule:truthy
@@ -101,3 +108,32 @@ jobs:
       harden_runner_supplemental_allowlist: 'lfreleng-actions//'
       harden_runner_supplemental_unpinned: true
       harden_runner_extra_endpoints: 'github.com:443'
+
+  # Static checks on the gating wiring, including the fetch-depth the
+  # detection step needs and the gerrit-validate rejection of each
+  # invalid policy value, run from the workflows this branch defines.
+  grype-gating-checks:
+    name: 'Grype Gating Wiring'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: 'Checkout repository'
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 'Check the Grype gating wiring'
+        shell: bash
+        env:
+          VENV: ${{ runner.temp }}/grype-gating-venv
+        run: |
+          # The script parses with 'python3 -I', which ignores the user
+          # site, so a user-site install would not reach it. A virtual
+          # environment on PATH does: '-I' keeps the interpreter's own
+          # prefix, and the script resolves python3 through PATH.
+          python3 -m venv "${VENV}"
+          "${VENV}/bin/python" -m pip install --quiet 'pyyaml==6.0.2'
+          PATH="${VENV}/bin:${PATH}" bash tests/test-grype-gating.sh

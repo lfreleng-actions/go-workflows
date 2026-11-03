@@ -23,3 +23,9 @@ paths:
       # learns the form.
       # yamllint disable-line rule:line-length
       - 'reusable workflow call "\$/\.github/workflows/build\-test\.yaml" at "uses" is not following the format'
+  .github/workflows/testing-gate.yaml:
+    ignore:
+      # Same self-repository reference as testing.yaml, with the same
+      # one-pattern-per-call rule; see the note above.
+      # yamllint disable-line rule:line-length
+      - 'reusable workflow call "\$/\.github/workflows/build\-test\.yaml" at "uses" is not following the format'
