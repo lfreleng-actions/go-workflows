@@ -101,8 +101,9 @@ jobs:
       staticcheck: ${{ matrix.staticcheck }}
       lint_permit_fail: ${{ matrix.lint_permit_fail }}
       # Each leg calls build-test in the same run; without a distinct
-      # suffix the legs share artefact names and one leg's Grype job
-      # can download another leg's SBOM.
+      # suffix the legs share artefact names and upload-artifact
+      # rejects the second upload of a name. The Grype job binds to
+      # its own SBOM by artefact ID regardless.
       artifact_suffix: ${{ matrix.name }}
       # Exercise the allow-list inputs without granting anything new.
       # A same-organisation list may follow its default branch, and
@@ -115,9 +116,9 @@ jobs:
 
   # Static checks on the gating wiring, including the fetch-depth the
   # detection step needs and the gerrit-validate rejection of each
-  # invalid policy value, and on the per-leg artefact suffix that keeps
-  # each leg's Grype job on its own SBOM, run from the workflows this
-  # branch defines.
+  # invalid policy value, and on the per-leg artefact suffix and the
+  # by-ID SBOM download that keep each leg's Grype job on its own
+  # SBOM, run from the workflows this branch defines.
   grype-gating-checks:
     name: 'Grype Gating Wiring'
     runs-on: ubuntu-latest
@@ -150,6 +151,7 @@ jobs:
           VENV: ${{ runner.temp }}/grype-gating-venv
         run: |
           # Each matrix leg must name its SBOM, Grype, CBOM and test
-          # artefacts apart, or one leg's Grype job can scan another
-          # leg's SBOM; reuses the virtual environment set up above
+          # artefacts apart, and each Grype job must download the SBOM
+          # its own sbom job uploaded, by artefact ID; reuses the
+          # virtual environment set up above
           PATH="${VENV}/bin:${PATH}" bash tests/test-artifact-suffix.sh

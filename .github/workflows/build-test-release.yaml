@@ -1354,6 +1354,12 @@ jobs:
     timeout-minutes: ${{ inputs.audit_timeout_minutes }}
     permissions:
       contents: read
+    outputs:
+      # The grype job downloads by this ID, never by name: a caller
+      # running this workflow twice in one run without a distinct
+      # artifact_suffix uploads under one name, and a name lookup can
+      # hand that job the other call's SBOM.
+      sbom_artifact_id: ${{ steps.sbom-upload.outputs.artifact-id }}
     steps:
       - name: 'Load egress allow-list'
         # yamllint disable-line rule:line-length
@@ -1413,6 +1419,7 @@ jobs:
           output_directory: '.'
 
       - name: 'Upload SBOM artifacts'
+        id: sbom-upload
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -1469,11 +1476,41 @@ jobs:
           allowed-endpoints: >
             ${{ env.CONNECTION_ALLOW_LIST }}
 
+      # Without an ID (an upload that produced none) download-artifact
+      # would fall back to fetching every artefact in the run, so stop
+      # here with a clear cause instead.
+      - name: 'Check SBOM artefact ID'
+        shell: bash
+        env:
+          SBOM_ARTIFACT_ID: ${{ needs.sbom.outputs.sbom_artifact_id }}
+        run: |
+          # Check SBOM artefact ID
+          if [[ ! "${SBOM_ARTIFACT_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::The sbom job exported no SBOM artefact ID;" \
+              "check its 'Upload SBOM artifacts' step"
+            exit 1
+          fi
+
+      # Bound to the sbom job's own upload by ID rather than by name,
+      # so a same-named artefact from another call of this workflow in
+      # the same run can never be the one scanned here.
       - name: 'Download SBOM artefact'
+        id: sbom-download
         # yamllint disable-line rule:line-length
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: sbom-files${{ env.ARTIFACT_SUFFIX }}
+          artifact-ids: ${{ needs.sbom.outputs.sbom_artifact_id }}
+
+      - name: 'Explain SBOM download failure'
+        if: failure() && steps.sbom-download.outcome == 'failure'
+        shell: bash
+        env:
+          SBOM_ARTIFACT_ID: ${{ needs.sbom.outputs.sbom_artifact_id }}
+        run: |
+          # Explain SBOM download failure
+          echo "::error::Could not download SBOM artefact" \
+            "${SBOM_ARTIFACT_ID} uploaded by the sbom job; it may have" \
+            "expired or been deleted since that job ran"
 
       # Setting the grype_permit_fail input, or the NO_BLOCK_AUDIT_FAIL
       # repository variable (an org/repo-wide override that soft-fails
