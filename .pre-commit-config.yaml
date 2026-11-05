@@ -177,10 +177,12 @@ repos:
         # yamllint disable-line rule:line-length
         files: '^(\.github/workflows/[^/]+\.yaml|tests/test-harden-runner-inputs\.sh)$'
 
-  # Drift check for the change-scoped Grype gating: the grype_* policy
-  # inputs, the pinned dependency-change-action step and the checkout
-  # depth it needs, the sidecar in the sbom-files artefact, and the
-  # gerrit-validate step's rejection of each invalid value.
+  # Drift check for the change-scoped Grype gating: the grype_* policy,
+  # detection and bypass inputs, the pinned repository-metadata-action
+  # step that detects dependency changes and the job output carrying
+  # its verdict, the grype job's guarded read of it, the absence of the
+  # retired sidecar wiring, and the gerrit-validate step's rejection of
+  # each invalid value.
   - repo: local
     hooks:
       - id: grype-gating

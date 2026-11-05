@@ -1,23 +1,24 @@
----
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
 
-# Runs the Go fixture through build-test with grype_gate_when set to
-# 'dependencies-changed'. The fixture pins a commit of another
-# repository, so dependency-change-action cannot resolve this pull
-# request's base against it and writes no sidecar; the assertion that
-# follows proves that unresolved path gates (gate-active true).
+# Runs build-test with grype_gate_when set to 'dependencies-changed'
+# in two lanes, so both paths of the change-scoped gate run end to end:
 #
-# This lane runs apart from testing.yaml on purpose. It calls the same
-# workflow against the same fixture as that matrix, and build-test
-# names its artefacts (sbom-files, cbom-files, grype-scan-results and
-# the per-Go-version test results) without a per-caller suffix unless
-# the caller sets artifact_suffix, which this lane does not.
+#   - unresolved: the external Go fixture pins a commit of another
+#     repository, so repository-metadata-action cannot resolve this
+#     pull request's base against it and leaves the verdict empty; the
+#     assertion proves that path gates (gate-active true);
+#   - resolved: the in-repository fixture under tests/fixtures/go-module
+#     is checked out at this run's own commit, so on a pull_request the
+#     action resolves a 'true' or 'false' verdict; the assertion proves
+#     the verdict reaches Grype and decides the gate. On
+#     workflow_dispatch no base exists, the verdict stays empty and the
+#     lane must gate like the unresolved one.
+#
+# This workflow runs apart from testing.yaml so its artefacts stay out
+# of that run, and each lane sets its own artifact_suffix because
 # upload-artifact rejects a second artefact of a name already uploaded
-# in a run, so a second invocation in the same run would fail at the
-# upload and the assertion would never run. A separate run keeps this
-# lane's uploads to itself without renaming the artefacts consumers
-# download.
+# in a run.
 #
 # The reusable workflow is referenced with the self-repository form
 # ('$/'), so the workflow under test is the one this branch defines.
@@ -52,6 +53,7 @@ jobs:
       repository: 'lfreleng-actions/test-go-project'
       ref: '02a24ba15c4687eb443bf407b5fc0b4d099ab86f' # v0.1.0
       grype_gate_when: 'dependencies-changed'
+      artifact_suffix: 'gate-unresolved'
 
   assert-gate:
     name: 'Assert Unresolved Change Gates'
@@ -64,14 +66,83 @@ jobs:
         shell: bash
         env:
           GATE_ACTIVE: ${{ needs.build-test-gate.outputs.grype_gate_active }}
+          # yamllint disable-line rule:line-length
+          VERDICT: ${{ needs.build-test-gate.outputs.grype_dependencies_changed }}
         run: |
-          # With no sidecar the action must leave the signal unresolved
-          # and arm the gate; anything else means a change that leaves
-          # the dependency chain alone could pass with the gate off
-          # even when detection never ran
+          # An unresolved verdict must arm the gate; anything else
+          # means a change that leaves the dependency chain alone
+          # could pass with the gate off even when detection never ran
+          if [ -n "${VERDICT}" ]; then
+            echo "::error::grype_dependencies_changed is '${VERDICT}'," \
+              "expected empty for another repository's checkout"
+            exit 1
+          fi
           if [ "${GATE_ACTIVE}" != 'true' ]; then
             echo "::error::grype_gate_active is '${GATE_ACTIVE}'," \
               "expected 'true' on the unresolved path"
             exit 1
           fi
           echo "Unresolved dependency change gates ✅"
+
+  # The fixture is this repository's own, so the checkout is the
+  # commit that triggered the run and the verdict resolves on a pull
+  # request. grype_permit_fail only stops a finding from failing the
+  # job; the gate is still decided first, and gate-active reports it.
+  build-test-resolved:
+    name: 'Build/Test (in-repo fixture, resolved dependency change)'
+    permissions:
+      contents: read
+      pull-requests: read  # repository-metadata-action queries PR data
+    uses: $/.github/workflows/build-test.yaml
+    with:
+      path_prefix: 'tests/fixtures/go-module'
+      grype_gate_when: 'dependencies-changed'
+      grype_permit_fail: true
+      artifact_suffix: 'gate-resolved'
+
+  assert-resolved:
+    name: 'Assert Resolved Verdict Reaches Grype'
+    needs: build-test-resolved
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: 'Check verdict and gate-active'
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # yamllint disable-line rule:line-length
+          GATE_ACTIVE: ${{ needs.build-test-resolved.outputs.grype_gate_active }}
+          # yamllint disable-line rule:line-length
+          VERDICT: ${{ needs.build-test-resolved.outputs.grype_dependencies_changed }}
+        run: |
+          echo "Event: ${EVENT_NAME}; verdict: '${VERDICT}';" \
+            "gate-active: '${GATE_ACTIVE}'"
+          if [ "${EVENT_NAME}" = 'pull_request' ]; then
+            # The base resolves here, so the verdict must be set and
+            # the gate must follow it
+            case "${VERDICT}" in
+              true|false) ;;
+              *)
+                echo "::error::grype_dependencies_changed is" \
+                  "'${VERDICT}', expected 'true' or 'false' on a" \
+                  "pull request of this repository"
+                exit 1
+                ;;
+            esac
+            if [ "${GATE_ACTIVE}" != "${VERDICT}" ]; then
+              echo "::error::grype_gate_active is '${GATE_ACTIVE}'," \
+                "expected '${VERDICT}' to follow the verdict"
+              exit 1
+            fi
+            echo "Resolved verdict '${VERDICT}' decides the gate ✅"
+          else
+            # No pull request base: the verdict stays unresolved and
+            # the gate must arm
+            if [ -n "${VERDICT}" ] || [ "${GATE_ACTIVE}" != 'true' ]; then
+              echo "::error::expected an empty verdict and gate-active" \
+                "'true' on ${EVENT_NAME}"
+              exit 1
+            fi
+            echo "Unresolved verdict on ${EVENT_NAME} gates ✅"
+          fi

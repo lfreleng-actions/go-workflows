@@ -196,7 +196,9 @@ on:
         type: boolean
         default: true
       grype_fail_on:
-        description: 'Minimum severity that fails the Grype scan'
+        description: >-
+          Minimum severity that fails the Grype scan: negligible, low,
+          medium, high, critical, or none to report without gating
         required: false
         type: string
         default: 'medium'
@@ -207,6 +209,14 @@ on:
         required: false
         type: boolean
         default: false
+      grype_bypass_repository:
+        description: >-
+          Repository (owner/name) holding the approved 'BYPASS:' issues
+          grype-scan-action honours. Empty reads them from the calling
+          repository; set it to share one bypass list.
+        required: false
+        type: string
+        default: ''
       # A release always gates, so there is no grype_gate_when here
       # and no dependency-change detection; the policy inputs below
       # match the build-test workflow's.
@@ -550,6 +560,8 @@ jobs:
       - name: 'Validate Grype policy inputs'
         shell: bash
         env:
+          GRYPE_FAIL_ON: ${{ inputs.grype_fail_on }}
+          GRYPE_BYPASS_REPOSITORY: ${{ inputs.grype_bypass_repository }}
           GRYPE_DEPENDENCY_POLICY: ${{ inputs.grype_dependency_policy }}
           GRYPE_TRANSITIVE_FAIL_ON: ${{ inputs.grype_transitive_fail_on }}
           # yamllint disable-line rule:line-length
@@ -563,6 +575,19 @@ jobs:
           # be a real calendar date, and whether it lies in the future
           # is left to the action
           error=0
+          case "${GRYPE_FAIL_ON}" in
+            negligible|low|medium|high|critical|none) ;;
+            *)
+              echo "::error::Invalid grype_fail_on input:" \
+                "${GRYPE_FAIL_ON}"
+              error=1 ;;
+          esac
+          valid_repository='^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?$'
+          if [[ ! "${GRYPE_BYPASS_REPOSITORY}" =~ ${valid_repository} ]]; then
+            echo "::error::Invalid grype_bypass_repository input:" \
+              "${GRYPE_BYPASS_REPOSITORY}"
+            error=1
+          fi
           case "${GRYPE_DEPENDENCY_POLICY}" in
             all|declared) ;;
             *)
@@ -680,7 +705,7 @@ jobs:
       - name: 'Gather repository metadata'
         id: repo-metadata
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/repository-metadata-action@2206d754f65f1a90f57b49be546712c5f594def2  # v0.3.3
+        uses: lfreleng-actions/repository-metadata-action@18e5b7c5b16423b0e734891d103513826b324858  # v0.4.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           github_summary: 'true'
@@ -1520,7 +1545,7 @@ jobs:
       # dependencies.
       #
       # A release always gates: gate-when is fixed and no
-      # dependency-change sidecar is produced or read.
+      # dependency-change verdict is detected or read.
       - name: 'Grype audit SBOM'
         id: grype-audit
         # yamllint disable-line rule:line-length
@@ -1540,6 +1565,7 @@ jobs:
           remediation-window-start: ${{ inputs.grype_remediation_window_start }}
           artifact-name: 'grype-scan-results${{ env.ARTIFACT_SUFFIX }}'
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          bypass-repository: ${{ inputs.grype_bypass_repository }}
 
   # Informational leg, and the one exception to this workflow's gating
   # inversion: the audit legs gate the tests, but nothing gates on the
