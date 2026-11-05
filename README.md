@@ -570,7 +570,12 @@ and `github.com:443` already sits on that list.
 `bash tests/test-harden-runner-inputs.sh` checks that both reusable
 workflows expose the five `harden_runner_*` inputs and pass each one
 through to every block-action step; a prek hook runs it on every
-workflow change.
+workflow change. Every block-action step in the repository must pin
+the same commit SHA, with a `# vX.Y.Z` comment naming the same
+release, at or above `v0.15.0`, the first with `extra_endpoints`, so
+a Dependabot bump to a newer release passes. Each input's description
+starts with the reference wording the script holds, and may add a
+note about the workflow after a full stop.
 
 `bash tests/test-grype-gating.sh` checks the Grype gating wiring: the
 inputs and their defaults in both workflows, the pinned detection step
