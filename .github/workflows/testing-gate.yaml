@@ -4,9 +4,10 @@
 
 # Runs the Go fixture through build-test with grype_gate_when set to
 # 'dependencies-changed'. The fixture pins a commit of another
-# repository, so dependency-change-action cannot resolve this pull
-# request's base against it and writes no sidecar; the assertion that
-# follows proves that unresolved path gates (gate-active true).
+# repository, so repository-metadata-action cannot resolve this pull
+# request's base against it and leaves the verdict empty; the
+# assertion that follows proves that unresolved path gates
+# (gate-active true).
 #
 # This lane runs apart from testing.yaml on purpose. It calls the same
 # workflow against the same fixture as that matrix, and build-test
@@ -65,7 +66,7 @@ jobs:
         env:
           GATE_ACTIVE: ${{ needs.build-test-gate.outputs.grype_gate_active }}
         run: |
-          # With no sidecar the action must leave the signal unresolved
+          # With no verdict the action must leave the signal unresolved
           # and arm the gate; anything else means a change that leaves
           # the dependency chain alone could pass with the gate off
           # even when detection never ran

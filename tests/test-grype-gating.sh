@@ -6,17 +6,23 @@
 # workflows.
 #
 # Static, from the parsed YAML:
-#   - build-test exposes the six grype_* policy inputs and the release
-#     workflow the five it takes (a release always gates), each with
-#     the agreed type and default;
-#   - the sbom job of build-test runs dependency-change-action at the
-#     agreed pin, after the checkout and before the SBOM upload, and
-#     that checkout fetches depth 2 (at depth 1 every pull request
-#     would be unresolved and gate);
-#   - dependency-change.json rides in the sbom-files artefact and the
-#     grype job names it through dependency-change-manifest;
+#   - build-test exposes the grype_* policy, detection and bypass
+#     inputs and the release workflow the ones it takes (a release
+#     always gates and detects nothing), each with the agreed type and
+#     default;
+#   - every workflow pins repository-metadata-action at v0.4.0, and in
+#     build-test its step detects only when grype_gate_when is
+#     'dependencies-changed', with the refspec, presets, patterns and
+#     path prefix passed through, and its job exports the verdict as
+#     dependencies_changed;
+#   - the grype job needs repository-metadata yet still runs when it
+#     fails or skips (!cancelled(), no result requirement), and passes
+#     the verdict only when that job succeeded;
+#   - no dependency-change-action call, sidecar file, manifest input or
+#     detection-only sbom checkout depth remains;
 #   - every policy input reaches grype-scan-action, and the workflow
-#     surfaces the gate-active output the self-test asserts.
+#     surfaces the gate-active and verdict outputs the self-test
+#     asserts.
 #
 # Dynamic: the 'Validate Grype policy inputs' step of gerrit-validate
 # is extracted from each workflow and run under bash with each valid
@@ -61,21 +67,44 @@ import sys
 
 import yaml
 
+METADATA_ACTION = "lfreleng-actions/repository-metadata-action"
+METADATA_PIN = "18e5b7c5b16423b0e734891d103513826b324858"  # v0.4.0
+METADATA_TAG = "v0.4.0"
+METADATA_JOB = "repository-metadata"
+# Detection moved into repository-metadata-action; no workflow may
+# call the detector itself or carry its sidecar any more.
 DETECT_ACTION = "lfreleng-actions/dependency-change-action"
-DETECT_PIN = "257928b15e4e6a5cc5a888435be59b058055c4e1"  # v0.0.1
+RETIRED = ("dependency-change.json", "dependency-change-manifest")
 GRYPE_ACTION = "lfreleng-actions/grype-scan-action"
 GRYPE_PIN = "5c81b23afb2ea771b2d247807a12d90783328675"  # v0.5.0
 CHECKOUT_ACTION = "actions/checkout"
-UPLOAD_ACTION = "actions/upload-artifact"
 DOWNLOAD_ACTION = "actions/download-artifact"
-SIDECAR = "dependency-change.json"
 # The per-call suffix and the download's binding to the upload by ID
 # are checked in tests/test-artifact-suffix.sh.
-ARTEFACT = "sbom-files${{ env.ARTIFACT_SUFFIX }}"
 ARTEFACT_ID = "${{ needs.sbom.outputs.sbom_artifact_id }}"
 VALIDATE_STEP = "Validate Grype policy inputs"
 
-# name -> (type, default, grype-scan-action input)
+DETECT_ON = (
+    "${{ inputs.grype_enabled"
+    " && inputs.grype_gate_when == 'dependencies-changed' }}"
+)
+# Runs whatever repository-metadata's result; the verdict below is
+# empty unless that job succeeded, and empty gates.
+GRYPE_IF = (
+    "${{ !cancelled() && needs.sbom.result == 'success'"
+    " && inputs.grype_enabled }}"
+)
+VERDICT = (
+    "${{ needs.%s.result == 'success'"
+    " && needs.%s.outputs.dependencies_changed || '' }}"
+    % (METADATA_JOB, METADATA_JOB)
+)
+# A workflow_call output cannot read a job's result, so the grype job
+# re-exports the guarded verdict it received and the workflow surfaces
+# that.
+VERDICT_OUTPUT = "${{ jobs.grype.outputs.dependencies_changed }}"
+
+# name -> (type, default, grype-scan-action input); both workflows.
 POLICY_INPUTS = {
     "grype_dependency_policy": ("string", "declared", "dependency-policy"),
     "grype_transitive_fail_on": ("string", "critical", "transitive-fail-on"),
@@ -84,19 +113,52 @@ POLICY_INPUTS = {
     "grype_remediation_window_start": (
         "string", "", "remediation-window-start",
     ),
+    "grype_bypass_repository": ("string", "", "bypass-repository"),
 }
+FAIL_ON = "grype_fail_on"
 GATE_WHEN = "grype_gate_when"
+# name -> repository-metadata-action input; verify workflows only.
+DETECTION_INPUTS = {
+    "grype_dependency_ecosystems": "dependency_ecosystems",
+    "grype_dependency_patterns": "dependency_patterns",
+}
+# Validated in gerrit-validate; the patterns are left to the detector.
+VALIDATED = {FAIL_ON, "grype_bypass_repository"} | {
+    name for name, (kind, _, _) in POLICY_INPUTS.items() if kind == "string"
+}
+VALIDATED_VERIFY = {GATE_WHEN, "grype_dependency_ecosystems"}
 
 # Every workflow_call workflow that calls grype-scan-action; 'verify'
-# ones take grype_gate_when and run detection, the rest always gate.
+# ones take grype_gate_when and detect, the rest always gate.
 VERIFY = {"build-test.yaml"}
 RELEASE = {"build-test-release.yaml"}
 
 # input -> ([accepted], [rejected]) for the extracted validate step.
 CASES = {
+    FAIL_ON: (
+        ["negligible", "low", "medium", "high", "critical", "none"],
+        ["", "severe", "Medium", "medium,high", " high"],
+    ),
     GATE_WHEN: (
         ["always", "dependencies-changed"],
         ["", "sometimes", "Always", "dependencies_changed"],
+    ),
+    "grype_dependency_ecosystems": (
+        [
+            "", "go", "go,node", " go , python ",
+            "node,python,go,maven,gradle,rust,docker",
+        ],
+        [
+            "golang", "Go", "go,", ",go", "go,,node", "go;node", "go node",
+            "go\nnode", "npm",
+        ],
+    ),
+    "grype_bypass_repository": (
+        ["", "lfreleng-actions/.github", "Owner_1/repo-name.x"],
+        [
+            "owner", "owner/", "/name", "owner/name/extra", "owner name/x",
+            "https://github.com/o/n", "o/n;x", "o/n\n",
+        ],
     ),
     "grype_dependency_policy": (
         ["all", "declared"],
@@ -120,6 +182,7 @@ CASES = {
         ],
     ),
 }
+VERIFY_ONLY_CASES = {GATE_WHEN, "grype_dependency_ecosystems"}
 
 
 def triggers(doc):
@@ -158,7 +221,44 @@ def check_input(inputs, name, kind, default, problems):
         problems.append(f"input {name} default is not {default!r}")
 
 
+def check_metadata(doc, verify, problems):
+    job = (doc.get("jobs") or {}).get(METADATA_JOB) or {}
+    index, step = find_step(steps_of(doc, METADATA_JOB), METADATA_ACTION)
+    if step is None:
+        problems.append(f"jobs.{METADATA_JOB} does not call {METADATA_ACTION}")
+        return
+    where = f"jobs.{METADATA_JOB}.steps[{index}]"
+    if step["uses"].partition("@")[2] != METADATA_PIN:
+        problems.append(
+            f"{where} does not pin {METADATA_ACTION}@{METADATA_PIN}"
+        )
+    given = step.get("with") or {}
+    if not verify:
+        if "dependency_change" in given:
+            problems.append(f"{where} must not detect on a release")
+        return
+    wanted = {
+        "dependency_change": DETECT_ON,
+        "gerrit_refspec": "${{ inputs.gerrit_refspec }}",
+        "dependency_path_prefix": "${{ inputs.path_prefix }}",
+    }
+    for name, key in DETECTION_INPUTS.items():
+        wanted[key] = "${{ inputs.%s }}" % name
+    for key, expected in wanted.items():
+        if given.get(key) != expected:
+            problems.append(f"{where} does not pass {key} as {expected}")
+    step_id = step.get("id")
+    expected = "${{ steps.%s.outputs.dependencies_changed }}" % step_id
+    if not step_id or \
+            (job.get("outputs") or {}).get("dependencies_changed") != expected:
+        problems.append(
+            f"jobs.{METADATA_JOB}.outputs.dependencies_changed is not"
+            " the step's verdict"
+        )
+
+
 def check_grype_step(doc, verify, problems):
+    job = (doc.get("jobs") or {}).get("grype") or {}
     steps = steps_of(doc, "grype")
     _, download = find_step(steps, DOWNLOAD_ACTION)
     if download is None or \
@@ -176,94 +276,70 @@ def check_grype_step(doc, verify, problems):
         expected = "${{ inputs.%s }}" % name
         if given.get(key) != expected:
             problems.append(f"{where} does not pass {key} as {expected}")
+    for key in RETIRED:
+        if key in given:
+            problems.append(f"{where} still passes {key}")
     if verify:
+        needs = job.get("needs")
+        needs = [needs] if isinstance(needs, str) else list(needs or [])
+        if "sbom" not in needs or METADATA_JOB not in needs:
+            problems.append(f"jobs.grype must need sbom and {METADATA_JOB}")
+        # Exact, so the job cannot come to require the metadata job's
+        # success (which would skip the scan) or lose !cancelled().
+        if job.get("if") != GRYPE_IF:
+            problems.append(f"jobs.grype must run on {GRYPE_IF}")
         if given.get("gate-when") != "${{ inputs.%s }}" % GATE_WHEN:
             problems.append(f"{where} does not pass gate-when from the input")
-        if given.get("dependency-change-manifest") != SIDECAR:
-            problems.append(f"{where} does not name {SIDECAR}")
-        outputs = (doc["jobs"]["grype"].get("outputs") or {})
+        if given.get("dependencies-changed") != VERDICT:
+            problems.append(
+                f"{where} does not pass dependencies-changed as {VERDICT}"
+            )
+        outputs = job.get("outputs") or {}
         step_id = step.get("id")
         wanted = "${{ steps.%s.outputs.gate-active }}" % step_id
         if not step_id or outputs.get("gate_active") != wanted:
             problems.append("jobs.grype.outputs.gate_active is not gate-active")
+        if outputs.get("dependencies_changed") != VERDICT:
+            problems.append(
+                f"jobs.grype.outputs.dependencies_changed is not {VERDICT}"
+            )
         call = triggers(doc).get("workflow_call") or {}
-        exposed = ((call.get("outputs") or {}).get("grype_gate_active") or {})
-        if exposed.get("value") != "${{ jobs.grype.outputs.gate_active }}":
+        exposed = call.get("outputs") or {}
+        if (exposed.get("grype_gate_active") or {}).get("value") != \
+                "${{ jobs.grype.outputs.gate_active }}":
             problems.append("output grype_gate_active is missing")
+        if (exposed.get("grype_dependencies_changed") or {}).get("value") \
+                != VERDICT_OUTPUT:
+            problems.append(
+                f"output grype_dependencies_changed is not {VERDICT_OUTPUT}"
+            )
     else:
         if given.get("gate-when") != "always":
             problems.append(f"{where} must fix gate-when to always")
-        if "dependency-change-manifest" in given:
-            problems.append(f"{where} must not read a sidecar on a release")
+        if "dependencies-changed" in given:
+            problems.append(f"{where} must not read a verdict on a release")
 
 
-def check_detection(doc, problems):
-    steps = steps_of(doc, "sbom")
-    checkout_index, checkout = find_step(steps, CHECKOUT_ACTION)
-    if checkout is None:
-        problems.append("jobs.sbom has no actions/checkout step")
-        return
-    depth = (checkout.get("with") or {}).get("fetch-depth")
-    # Depth 0 is a full clone and also serves; 1 cannot diff a parent.
-    if not isinstance(depth, int) or isinstance(depth, bool) or depth == 1 \
-            or depth < 0:
-        problems.append(
-            f"jobs.sbom.steps[{checkout_index}] fetch-depth must be 0 or"
-            f" >= 2, is {depth!r}"
-        )
-    detect_index, detect = find_step(steps, DETECT_ACTION)
-    if detect is None:
-        problems.append(f"jobs.sbom does not call {DETECT_ACTION}")
-        return
-    where = f"jobs.sbom.steps[{detect_index}]"
-    if detect["uses"].partition("@")[2] != DETECT_PIN:
-        problems.append(f"{where} does not pin {DETECT_ACTION}@{DETECT_PIN}")
-    if detect.get("id") != "dependency-change":
-        problems.append(f"{where} id is not dependency-change")
-    wanted_if = (
-        "inputs.grype_enabled && inputs.%s == 'dependencies-changed'"
-        % GATE_WHEN
-    )
-    if detect.get("if") != wanted_if:
-        problems.append(f"{where} does not run on {wanted_if}")
-    given = detect.get("with") or {}
-    for key, expected in {
-        "ecosystems": "go",
-        "path-prefix": "${{ inputs.path_prefix }}",
-        "gerrit-refspec": "${{ inputs.gerrit_refspec }}",
-        "output": SIDECAR,
-    }.items():
-        if given.get(key) != expected:
-            problems.append(f"{where} does not pass {key} as {expected!r}")
-    upload_index, upload = find_step(steps, UPLOAD_ACTION)
-    if upload is None:
-        problems.append("jobs.sbom has no upload-artifact step")
-        return
-    if not checkout_index < detect_index < upload_index:
-        problems.append(
-            f"{where} must follow the checkout and precede the upload"
-        )
-    given = upload.get("with") or {}
-    paths = str(given.get("path", "")).split()
-    if given.get("name") != ARTEFACT or SIDECAR not in paths:
-        problems.append(
-            f"jobs.sbom.steps[{upload_index}] does not carry {SIDECAR}"
-            f" in {ARTEFACT}"
-        )
-    if given.get("if-no-files-found") != "error":
-        problems.append(
-            f"jobs.sbom.steps[{upload_index}] must still fail on a missing"
-            " SBOM"
-        )
-
-
-def check_release_has_no_detection(doc, problems):
+def check_retired(doc, problems):
+    """No detector call, sidecar or detection-only depth remains."""
     for job_id in doc.get("jobs") or {}:
         index, step = find_step(steps_of(doc, job_id), DETECT_ACTION)
         if step is not None:
             problems.append(
-                f"jobs.{job_id}.steps[{index}] runs detection on a release"
+                f"jobs.{job_id}.steps[{index}] still calls {DETECT_ACTION}"
             )
+    # Values only: the raw text check in main() covers comments too.
+    dumped = yaml.safe_dump(doc)
+    for word in RETIRED:
+        if word in dumped:
+            problems.append(f"{word} still appears in the workflow")
+    index, checkout = find_step(steps_of(doc, "sbom"), CHECKOUT_ACTION)
+    if checkout is not None and \
+            "fetch-depth" in (checkout.get("with") or {}):
+        problems.append(
+            f"jobs.sbom.steps[{index}] keeps a fetch-depth the sbom job"
+            " no longer needs"
+        )
 
 
 def validate_step(doc):
@@ -286,11 +362,9 @@ def check_validate_step(doc, verify, problems):
         match = re.fullmatch(r"\$\{\{ inputs\.([a-z_]+) \}\}", str(value))
         if match:
             referenced.add(match.group(1))
-    expected = {
-        name for name, (kind, _, _) in POLICY_INPUTS.items() if kind == "string"
-    }
+    expected = set(VALIDATED)
     if verify:
-        expected.add(GATE_WHEN)
+        expected |= VALIDATED_VERIFY
     for name in sorted(expected - referenced):
         problems.append(f"'{VALIDATE_STEP}' does not read {name}")
     if not isinstance(step.get("run"), str) or not step["run"].strip():
@@ -302,17 +376,45 @@ def check_doc(name, doc):
     verify = name in VERIFY
     problems = []
     inputs = inputs_of(doc)
+    check_input(inputs, FAIL_ON, "string", "medium", problems)
     for input_name, (kind, default, _) in POLICY_INPUTS.items():
         check_input(inputs, input_name, kind, default, problems)
     if verify:
         check_input(inputs, GATE_WHEN, "string", "always", problems)
-        check_detection(doc, problems)
+        for input_name in DETECTION_INPUTS:
+            check_input(inputs, input_name, "string", "", problems)
     else:
-        if GATE_WHEN in inputs:
-            problems.append(f"input {GATE_WHEN} is not a release input")
-        check_release_has_no_detection(doc, problems)
+        for input_name in [GATE_WHEN] + list(DETECTION_INPUTS):
+            if input_name in inputs:
+                problems.append(f"input {input_name} is not a release input")
+    check_metadata(doc, verify, problems)
+    check_retired(doc, problems)
     check_grype_step(doc, verify, problems)
     check_validate_step(doc, verify, problems)
+    return problems
+
+
+def check_text(path):
+    """Checks on the raw file: pins and their comments, retired words."""
+    text = path.read_text(encoding="utf-8")
+    problems = []
+    for action, pin, tag in (
+        (GRYPE_ACTION, GRYPE_PIN, "v0.5.0"),
+        (METADATA_ACTION, METADATA_PIN, METADATA_TAG),
+    ):
+        for line in re.findall(
+            r"uses:\s+%s@\S+.*" % re.escape(action), text,
+        ):
+            if not re.fullmatch(
+                r"uses:\s+%s@%s\s+#\s+%s\b.*"
+                % (re.escape(action), re.escape(pin), re.escape(tag)),
+                line,
+            ):
+                problems.append(f"'{line.strip()}' is not {action}@{pin}"
+                                f" # {tag}")
+    for word in RETIRED:
+        if word in text:
+            problems.append(f"{word} still appears in {path.name}")
     return problems
 
 
@@ -344,7 +446,7 @@ def exercise_validation(name, doc):
         wrong += 1
         print(f"::error file={name}::defaults rejected: {output.strip()}")
     for input_name, (accepted, rejected) in CASES.items():
-        if input_name == GATE_WHEN and not verify:
+        if input_name in VERIFY_ONLY_CASES and not verify:
             continue
         for value in accepted:
             total += 1
@@ -371,18 +473,6 @@ def exercise_validation(name, doc):
     return wrong
 
 
-def pin_comment(path, action, pin, tag):
-    """The pinned 'uses:' line must carry its version comment."""
-    pattern = re.compile(
-        r"uses:\s+%s@%s\s+#\s+%s\b" % (
-            re.escape(action), re.escape(pin), re.escape(tag),
-        )
-    )
-    if not pattern.search(path.read_text(encoding="utf-8")):
-        return [f"{action}@{pin} lacks its '# {tag}' comment"]
-    return []
-
-
 def mutants(doc):
     """Yield (label, mutated doc) for each drift the check must catch."""
     on_key = "on" if "on" in doc else True
@@ -393,7 +483,14 @@ def mutants(doc):
     def step(d, job, action):
         return find_step(steps_of(d, job), action)[1]
 
-    for name in list(POLICY_INPUTS) + [GATE_WHEN]:
+    def metadata(d):
+        return step(d, METADATA_JOB, METADATA_ACTION)
+
+    def grype(d):
+        return step(d, "grype", GRYPE_ACTION)
+
+    for name in [FAIL_ON, GATE_WHEN] + list(POLICY_INPUTS) + \
+            list(DETECTION_INPUTS):
         d = copy.deepcopy(doc)
         del inputs(d)[name]
         yield f"drop input {name}", d
@@ -401,59 +498,85 @@ def mutants(doc):
     inputs(d)[GATE_WHEN]["default"] = "dependencies-changed"
     yield "gate_when defaults to dependencies-changed", d
     d = copy.deepcopy(doc)
+    inputs(d)[FAIL_ON]["default"] = "high"
+    yield "fail_on default changed", d
+    d = copy.deepcopy(doc)
     inputs(d)["grype_only_fixed"]["default"] = False
     yield "only_fixed defaults to false", d
     d = copy.deepcopy(doc)
     inputs(d)["grype_remediation_window_days"]["default"] = "30"
     yield "remediation window on by default", d
     d = copy.deepcopy(doc)
-    del step(d, "sbom", CHECKOUT_ACTION)["with"]["fetch-depth"]
-    yield "sbom checkout at default depth", d
+    inputs(d)["grype_dependency_ecosystems"]["default"] = "go"
+    yield "ecosystems narrowed by default", d
     d = copy.deepcopy(doc)
-    step(d, "sbom", CHECKOUT_ACTION)["with"]["fetch-depth"] = 1
-    yield "sbom checkout at depth 1", d
+    metadata(d)["uses"] = f"{METADATA_ACTION}@{'0' * 40}"
+    yield "metadata action pinned elsewhere", d
     d = copy.deepcopy(doc)
-    step(d, "sbom", DETECT_ACTION)["uses"] = f"{DETECT_ACTION}@{'0' * 40}"
-    yield "detection pinned elsewhere", d
-    d = copy.deepcopy(doc)
-    step(d, "sbom", DETECT_ACTION)["if"] = "inputs.grype_enabled"
+    metadata(d)["with"]["dependency_change"] = "true"
     yield "detection runs on always", d
+    for key in ["dependency_change", "gerrit_refspec",
+                "dependency_path_prefix"] + list(DETECTION_INPUTS.values()):
+        d = copy.deepcopy(doc)
+        del metadata(d)["with"][key]
+        yield f"metadata step drops {key}", d
     d = copy.deepcopy(doc)
-    step(d, "sbom", DETECT_ACTION)["with"]["ecosystems"] = "python"
-    yield "detection preset not go", d
+    del d["jobs"][METADATA_JOB]["outputs"]
+    yield "metadata job drops dependencies_changed", d
     d = copy.deepcopy(doc)
-    steps = d["jobs"]["sbom"]["steps"]
-    index, detect = find_step(steps, DETECT_ACTION)
-    steps.append(steps.pop(index))
-    yield "detection after the upload", d
+    d["jobs"]["grype"]["needs"] = "sbom"
+    yield "grype job does not need the metadata job", d
     d = copy.deepcopy(doc)
-    step(d, "sbom", UPLOAD_ACTION)["with"]["path"] = "sbom-cyclonedx.*"
-    yield "sidecar left out of the artefact", d
+    d["jobs"]["grype"]["if"] = GRYPE_IF.replace(
+        " }}", f" && needs.{METADATA_JOB}.result == 'success' }}}}"
+    )
+    yield "grype job skips when metadata fails", d
     d = copy.deepcopy(doc)
-    step(d, "sbom", UPLOAD_ACTION)["with"]["if-no-files-found"] = "ignore"
-    yield "upload ignores a missing SBOM", d
+    d["jobs"]["grype"]["if"] = GRYPE_IF.replace("!cancelled() && ", "")
+    yield "grype job drops !cancelled()", d
+    d = copy.deepcopy(doc)
+    grype(d)["with"]["dependencies-changed"] = (
+        "${{ needs.%s.outputs.dependencies_changed }}" % METADATA_JOB
+    )
+    yield "verdict not guarded by the job result", d
+    d = copy.deepcopy(doc)
+    grype(d)["with"]["dependency-change-manifest"] = RETIRED[0]
+    yield "grype step reads the sidecar again", d
+    d = copy.deepcopy(doc)
+    d["jobs"]["sbom"]["steps"].insert(0, {
+        "uses": f"{DETECT_ACTION}@{'0' * 40}", "with": {"ecosystems": "go"},
+    })
+    yield "sbom job runs the detector again", d
+    d = copy.deepcopy(doc)
+    step(d, "sbom", CHECKOUT_ACTION)["with"]["fetch-depth"] = 2
+    yield "sbom checkout keeps depth 2", d
     for _, _, key in POLICY_INPUTS.values():
         d = copy.deepcopy(doc)
-        del step(d, "grype", GRYPE_ACTION)["with"][key]
+        del grype(d)["with"][key]
         yield f"grype step drops {key}", d
     d = copy.deepcopy(doc)
-    del step(d, "grype", GRYPE_ACTION)["with"]["dependency-change-manifest"]
-    yield "grype step drops the manifest", d
-    d = copy.deepcopy(doc)
-    step(d, "grype", GRYPE_ACTION)["with"]["gate-when"] = "always"
+    grype(d)["with"]["gate-when"] = "always"
     yield "grype step fixes gate-when", d
     d = copy.deepcopy(doc)
     del d["jobs"]["grype"]["outputs"]
     yield "grype job drops gate_active", d
     d = copy.deepcopy(doc)
-    del d[on_key]["workflow_call"]["outputs"]["grype_gate_active"]
-    yield "workflow drops grype_gate_active", d
-    d = copy.deepcopy(doc)
-    validate = validate_step(d)
-    validate["env"].pop(
-        next(k for k, v in validate["env"].items() if GATE_WHEN in v)
+    d["jobs"]["grype"]["outputs"]["dependencies_changed"] = (
+        "${{ needs.%s.outputs.dependencies_changed }}" % METADATA_JOB
     )
-    yield "validate step ignores gate_when", d
+    yield "grype job exports an unguarded verdict", d
+    for output in ("grype_gate_active", "grype_dependencies_changed"):
+        d = copy.deepcopy(doc)
+        del d[on_key]["workflow_call"]["outputs"][output]
+        yield f"workflow drops {output}", d
+    for name in sorted(VALIDATED | VALIDATED_VERIFY):
+        d = copy.deepcopy(doc)
+        validate = validate_step(d)
+        validate["env"].pop(
+            next(k for k, v in validate["env"].items()
+                 if v == "${{ inputs.%s }}" % name)
+        )
+        yield f"validate step ignores {name}", d
     d = copy.deepcopy(doc)
     validate_step(d)["if"] = "inputs.grype_enabled"
     yield "validate step conditional", d
@@ -480,14 +603,13 @@ root = pathlib.Path(sys.argv[1])
 failures = 0
 docs = {}
 for workflow in sorted(root.glob("*.y*ml")):
-    if workflow.name not in VERIFY | RELEASE:
-        continue
-    doc = yaml.safe_load(workflow.read_text(encoding="utf-8"))
-    docs[workflow.name] = doc
-    problems = check_doc(workflow.name, doc)
-    problems += pin_comment(workflow, GRYPE_ACTION, GRYPE_PIN, "v0.5.0")
-    if workflow.name in VERIFY:
-        problems += pin_comment(workflow, DETECT_ACTION, DETECT_PIN, "v0.0.1")
+    # The single pin covers every workflow that calls the action.
+    problems = [p for p in check_text(workflow)
+                if workflow.name in VERIFY | RELEASE or METADATA_ACTION in p]
+    if workflow.name in VERIFY | RELEASE:
+        doc = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        docs[workflow.name] = doc
+        problems += check_doc(workflow.name, doc)
     for problem in problems:
         failures += 1
         print(f"::error file={workflow}::{problem}")

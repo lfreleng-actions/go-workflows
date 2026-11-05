@@ -18,11 +18,10 @@
 # releases), which is neither available nor safe on a pull request.
 # Instantiating repos validate it through their own release cycles.
 #
-# The change-scoped Grype gate lane lives in testing-gate.yaml, in its
-# own run: it calls the same workflow against the same fixture, and
-# upload-artifact rejects a second artefact of a name already uploaded
-# in a run. The wiring itself (inputs, pins, checkout depth, sidecar
-# transport and gerrit-validate rejections) is checked statically by
+# The change-scoped Grype gate lanes live in testing-gate.yaml, in
+# their own run. The wiring itself (inputs, pins, the detection step
+# in repository-metadata, the guarded verdict the grype job reads and
+# gerrit-validate rejections) is checked statically by
 # tests/test-grype-gating.sh in the grype-gating-checks job below.
 name: 'Testing 🧪'
 
@@ -114,8 +113,8 @@ jobs:
       harden_runner_supplemental_unpinned: true
       harden_runner_extra_endpoints: 'github.com:443'
 
-  # Static checks on the gating wiring, including the fetch-depth the
-  # detection step needs and the gerrit-validate rejection of each
+  # Static checks on the gating wiring, including the detection step,
+  # the guarded verdict and the gerrit-validate rejection of each
   # invalid policy value, and on the per-leg artefact suffix and the
   # by-ID SBOM download that keep each leg's Grype job on its own
   # SBOM, run from the workflows this branch defines.
