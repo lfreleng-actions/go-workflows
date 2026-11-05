@@ -534,14 +534,20 @@ and an ONAP monorepo subdirectory). The release workflow needs a signed
 tag-push context, so consuming repositories exercise it through their
 own release cycles.
 
-`.github/workflows/testing-gate.yaml` runs the Go fixture with
-`grype_gate_when: dependencies-changed`. The fixture pins a commit of
-another repository, so the pull request's base is not an ancestor of
-it and repository-metadata-action cannot resolve a base: the lane proves
-the unresolved path gates by asserting the `grype_gate_active` output
-is `true`. It runs apart from `testing.yaml` because both call
-build-test against the same fixture, and `upload-artifact` rejects a
-second artefact of a name already uploaded in a run.
+`.github/workflows/testing-gate.yaml` runs build-test with
+`grype_gate_when: dependencies-changed` in two lanes, each with its
+own `artifact_suffix`. The first runs the external Go fixture, which
+pins a commit of another repository, so the pull request's base cannot
+resolve against it: the lane proves the unresolved path gates by
+asserting an empty `grype_dependencies_changed` output and a
+`grype_gate_active` output of `true`. The second runs the in-repository
+module under `tests/fixtures/go-module`, checked out at the run's own
+commit: on a pull request it asserts a `true` or `false` verdict that
+`grype_gate_active` follows, proving a resolved verdict reaches Grype;
+on a manual run no base exists and it asserts the gate arms. That lane
+sets `grype_permit_fail`, because a pull request that changes no
+dependency file never arms its gate, while one that does arms it
+against whatever the scan finds.
 
 The `testing.yaml` legs call build-test in one run, so each passes its
 matrix name as `artifact_suffix`. Without it the legs share the
