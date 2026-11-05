@@ -467,13 +467,15 @@ jobs:
     # job always runs (only some validation steps are conditional), so
     # gating dependents on it does not trip GitHub's "skipped need
     # skips dependents" behaviour.
-    # The job carries no harden-runner step by design: it performs pure
-    # input-string validation with no checkout, artifacts or network
-    # access, and loading the egress allow-list would itself add an
-    # outbound call.
+    # The job checks out nothing and carries no harden-runner step by
+    # design: its one action, grype-scan-action in validate-only mode,
+    # is fetched by GitHub with the workflow, and that it makes no
+    # network request of its own is the action's contract, tested in
+    # its own repository rather than proven here. Loading the egress
+    # allow-list would itself add an outbound call.
     runs-on: ubuntu-latest
     permissions: {}
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
       - name: 'Validate path_prefix input'
         shell: bash
@@ -557,69 +559,30 @@ jobs:
             exit 1
           fi
 
-      - name: 'Validate Grype policy inputs'
-        shell: bash
-        env:
-          GRYPE_FAIL_ON: ${{ inputs.grype_fail_on }}
-          GRYPE_BYPASS_REPOSITORY: ${{ inputs.grype_bypass_repository }}
-          GRYPE_DEPENDENCY_POLICY: ${{ inputs.grype_dependency_policy }}
-          GRYPE_TRANSITIVE_FAIL_ON: ${{ inputs.grype_transitive_fail_on }}
+      # grype-scan-action checks its inputs itself, but only once the
+      # build has run. Its validate-only mode runs the same checks on
+      # the same code and nothing else: no Grype install, no database,
+      # no scan, no bypass read, so a typo fails here in seconds and
+      # the rules cannot drift from the action's own. The step passes
+      # every policy input the grype job's scan passes, as the same
+      # expression, at the same pin: a release always gates, so
+      # gate-when is the scan's fixed value. grype_only_fixed is a
+      # boolean input, which GitHub types at the call.
+      - name: 'Validate Grype inputs'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/grype-scan-action@f65dca2762823cfc8f376e32fee9baa6f3292696  # v0.6.2
+        with:
+          validate-only: 'true'
+          fail-on: ${{ inputs.grype_fail_on }}
+          gate-when: 'always'
+          dependency-policy: ${{ inputs.grype_dependency_policy }}
+          transitive-fail-on: ${{ inputs.grype_transitive_fail_on }}
+          only-fixed: ${{ inputs.grype_only_fixed }}
           # yamllint disable-line rule:line-length
-          GRYPE_REMEDIATION_WINDOW_DAYS: ${{ inputs.grype_remediation_window_days }}
+          remediation-window-days: ${{ inputs.grype_remediation_window_days }}
           # yamllint disable-line rule:line-length
-          GRYPE_REMEDIATION_WINDOW_START: ${{ inputs.grype_remediation_window_start }}
-        run: |
-          # Reject a typo in the gating policy here, in seconds, rather
-          # than in grype-scan-action after the build. The values
-          # mirror the action's own enumerations; a window start must
-          # be a real calendar date, and whether it lies in the future
-          # is left to the action
-          error=0
-          case "${GRYPE_FAIL_ON}" in
-            negligible|low|medium|high|critical|none) ;;
-            *)
-              echo "::error::Invalid grype_fail_on input:" \
-                "${GRYPE_FAIL_ON}"
-              error=1 ;;
-          esac
-          valid_repository='^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?$'
-          if [[ ! "${GRYPE_BYPASS_REPOSITORY}" =~ ${valid_repository} ]]; then
-            echo "::error::Invalid grype_bypass_repository input:" \
-              "${GRYPE_BYPASS_REPOSITORY}"
-            error=1
-          fi
-          case "${GRYPE_DEPENDENCY_POLICY}" in
-            all|declared) ;;
-            *)
-              echo "::error::Invalid grype_dependency_policy input:" \
-                "${GRYPE_DEPENDENCY_POLICY}"
-              error=1 ;;
-          esac
-          case "${GRYPE_TRANSITIVE_FAIL_ON}" in
-            none|negligible|low|medium|high|critical) ;;
-            *)
-              echo "::error::Invalid grype_transitive_fail_on input:" \
-                "${GRYPE_TRANSITIVE_FAIL_ON}"
-              error=1 ;;
-          esac
-          if [[ ! "${GRYPE_REMEDIATION_WINDOW_DAYS}" =~ ^[0-9]*$ ]]; then
-            echo "::error::Invalid grype_remediation_window_days input:" \
-              "${GRYPE_REMEDIATION_WINDOW_DAYS}"
-            error=1
-          fi
-          start="${GRYPE_REMEDIATION_WINDOW_START}"
-          # The regex fixes the shape; GNU date rejects an impossible
-          # day such as 2026-02-31, and the comparison guards against
-          # a date that normalises instead
-          if [[ ! "${start}" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})?$ ]] ||
-            { [ -n "${start}" ] &&
-              [ "$(date -u -d "${start}" +%F 2>/dev/null)" != "${start}" ]
-            }; then
-            echo "::error::Invalid grype_remediation_window_start input:" \
-              "${start}"
-            error=1
-          fi
-          exit "${error}"
+          remediation-window-start: ${{ inputs.grype_remediation_window_start }}
+          bypass-repository: ${{ inputs.grype_bypass_repository }}
 
       - name: 'Require Gerrit project, branch and URL'
         if: inputs.gerrit_refspec != ''
@@ -1557,7 +1520,7 @@ jobs:
       - name: 'Grype audit SBOM'
         id: grype-audit
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/grype-scan-action@5c81b23afb2ea771b2d247807a12d90783328675  # v0.5.0
+        uses: lfreleng-actions/grype-scan-action@f65dca2762823cfc8f376e32fee9baa6f3292696  # v0.6.2
         with:
           sbom: 'sbom-cyclonedx.json'
           fail-on: ${{ inputs.grype_fail_on }}

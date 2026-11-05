@@ -34,8 +34,8 @@ Both workflows share the same scaffolding:
 - Step-security harden-runner in every job that touches the network,
   with a blocked egress
   policy and an out-of-band allow-list by default (the gerrit-validate
-  job runs pure input validation with no checkout or network access,
-  so it carries none)
+  job checks out nothing and runs one action, `grype-scan-action` in
+  its offline input-checking mode, so it carries none)
 - Explicit per-job permissions, top-level `permissions: {}`, and
   `timeout-minutes` on every job
 - The NO_BLOCK/soft-fail pattern: setting a `*_permit_fail` input, or
@@ -76,7 +76,12 @@ The `repository-metadata` job runs in parallel; it reports repository
 metadata and, under `grype_gate_when: dependencies-changed`, detects
 whether the change touched the dependency chain for the `grype` job.
 The `gerrit-validate` job fails fast on inconsistent Gerrit inputs and
-on an invalid Grype gating policy.
+on an invalid Grype gating policy: it runs `grype-scan-action` itself
+in its input-checking mode, at the scan step's pin and with the scan
+step's own expression for every policy input, so the action's own
+rules reject a typo in seconds, before the build, and cannot drift
+from what the scan accepts. That mode installs no Grype, fetches no
+database, scans nothing and reads no bypass issue.
 
 ### Change-Scoped Grype Gating
 
@@ -97,7 +102,9 @@ narrows it to a comma-separated subset (`go` for a pure Go module);
 `grype_dependency_patterns` adds file patterns, one per line, and
 `path_prefix` scopes the check to the module's directory.
 `gerrit-validate` rejects an empty entry or an unknown preset name in
-that list, and a bypass repository not in `owner/name` form.
+that list in a shell step of its own, since the list belongs to
+`repository-metadata-action` rather than `grype-scan-action`; the
+action rejects a bypass repository not in `owner/name` form.
 
 The detection fails closed. When the action cannot resolve a base,
 the verdict is empty, and `grype-scan-action` then gates as on an
@@ -130,9 +137,10 @@ off. `grype_remediation_window_start` is an optional floor on the
 start of the count: a fix published before that date counts from the
 date instead; empty (the default) sets no floor and counts every fix
 from publication, so it does not turn the window off. Neither does
-anything on `always` runs; `gerrit-validate` checks the days value is
-a whole number and the start value is a real `YYYY-MM-DD` date, and
-leaves "not in the future" to the action.
+anything on `always` runs. `gerrit-validate` checks both values
+through the action's input-checking mode, so the rules are the ones
+the scan applies: a whole number of days and a real `YYYY-MM-DD` date
+that is not in the future.
 
 The release workflow always gates: it accepts the policy inputs and
 `grype_bypass_repository` but not `grype_gate_when` or the detection
@@ -577,9 +585,16 @@ inputs and their defaults in both workflows, the pinned detection step
 in the `repository-metadata` job and the job output carrying its
 verdict, the `grype` job's guarded read of that output, the absence of
 the retired sidecar wiring, every policy input reaching
-`grype-scan-action`, and the `gerrit-validate` step rejecting each
-invalid value by running the step's own script. A prek hook and a
-`testing.yaml` job both run it.
+`grype-scan-action`, and the `gerrit-validate` validation step: the
+action at the scan step's pin in its input-checking mode and, for
+every input the scan step passes other than the ones a scan alone
+needs, the identical expression, read from the scan step rather than
+a list, and nothing else. The `grype_dependency_ecosystems` shell
+step, the one Grype-adjacent rule the action does not own, runs with
+each valid and invalid value. The script also holds `testing.yaml`'s
+`grype-validate-check` job to the same pin and defaults; that job runs
+the validation with a `gate-when` the action rejects and asserts the
+failure. A prek hook and a `testing.yaml` job both run the script.
 
 `bash tests/test-artifact-suffix.sh` checks that both reusable
 workflows take `artifact_suffix`, append it at every upload and

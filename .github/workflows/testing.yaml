@@ -21,8 +21,9 @@
 # The change-scoped Grype gate lanes live in testing-gate.yaml, in
 # their own run. The wiring itself (inputs, pins, the detection step
 # in repository-metadata, the guarded verdict the grype job reads and
-# gerrit-validate rejections) is checked statically by
-# tests/test-grype-gating.sh in the grype-gating-checks job below.
+# gerrit-validate's validate-only mirror of the scan step) is checked
+# statically by tests/test-grype-gating.sh in the grype-gating-checks
+# job below; grype-validate-check proves the rejection itself.
 name: 'Testing 🧪'
 
 # yamllint disable-line rule:truthy
@@ -115,10 +116,10 @@ jobs:
       harden_runner_extra_endpoints: 'github.com:443'
 
   # Static checks on the gating wiring, including the detection step,
-  # the guarded verdict and the gerrit-validate rejection of each
-  # invalid policy value, and on the per-leg artefact suffix and the
-  # by-ID SBOM download that keep each leg's Grype job on its own
-  # SBOM, run from the workflows this branch defines.
+  # the guarded verdict and gerrit-validate's validate-only step
+  # mirroring the scan step's inputs, and on the per-leg artefact
+  # suffix and the by-ID SBOM download that keep each leg's Grype job
+  # on its own SBOM, run from the workflows this branch defines.
   grype-gating-checks:
     name: 'Grype Gating Wiring'
     runs-on: ubuntu-latest
@@ -155,3 +156,57 @@ jobs:
           # its own sbom job uploaded, by artefact ID; reuses the
           # virtual environment set up above
           PATH="${VENV}/bin:${PATH}" bash tests/test-artifact-suffix.sh
+
+  # Proves build-test's gerrit-validate job rejects a bad policy value
+  # in seconds: grype-scan-action in validate-only mode, at the
+  # workflows' pin with build-test's default policy and a gate-when
+  # the action does not know, must fail. A job calling the workflow
+  # cannot set continue-on-error, so this runs the step itself, with
+  # the validator's with: block less the input expressions, which
+  # tests/test-grype-gating.sh holds in step. Like the workflows' job
+  # it runs that one action, with no checkout and no harden-runner:
+  # that validate-only makes no network request is the action's
+  # contract, tested in its own repository, so this job asserts the
+  # verdict alone and proves nothing about the network.
+  grype-validate-check:
+    name: 'Grype Validate Check'
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: 'Validate Grype inputs'
+        id: validate
+        continue-on-error: true
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/grype-scan-action@f65dca2762823cfc8f376e32fee9baa6f3292696  # v0.6.2
+        with:
+          validate-only: 'true'
+          fail-on: 'medium'
+          gate-when: 'sometimes'
+          dependency-policy: 'declared'
+          transitive-fail-on: 'critical'
+          only-fixed: 'true'
+          remediation-window-days: ''
+          remediation-window-start: ''
+          bypass-repository: ''
+
+      - name: 'Assert the step rejected the gate-when'
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.validate.outcome }}
+          VALIDATED: ${{ steps.validate.outputs.validated }}
+        run: |
+          # The rejection is the result under test, so the step above
+          # ends in failure and sets no validated output
+          echo "outcome: ${OUTCOME}"
+          echo "validated: ${VALIDATED}"
+          if [ "${OUTCOME}" != "failure" ]; then
+            echo "::error::validate-only ended '${OUTCOME}' on a" \
+              "gate-when the action does not know; expected failure"
+            exit 1
+          fi
+          if [ -n "${VALIDATED}" ]; then
+            echo "::error::validated is '${VALIDATED}' after a rejection"
+            exit 1
+          fi
+          echo "Grype validate-only rejection checked ✅"
