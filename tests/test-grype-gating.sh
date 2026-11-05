@@ -22,12 +22,23 @@
 #     detection-only sbom checkout depth remains;
 #   - every policy input reaches grype-scan-action, and the workflow
 #     surfaces the gate-active and verdict outputs the self-test
-#     asserts.
+#     asserts;
+#   - gerrit-validate validates the Grype inputs through
+#     grype-scan-action itself, in validate-only mode, at the scan
+#     step's pin and with the scan step's own expressions for every
+#     input it passes (read from the scan step, less the ones only a
+#     scan has, so an input added to the scan and not to the validator
+#     fails here) and nothing else: no sbom, no target; the job runs no
+#     other action and no shell check of a grype-scan-action input;
+#   - testing.yaml's check job runs that validation at the same pin
+#     with build-test's defaults and a gate-when the action rejects,
+#     under continue-on-error, and asserts the rejection.
 #
-# Dynamic: the 'Validate Grype policy inputs' step of gerrit-validate
-# is extracted from each workflow and run under bash with each valid
-# and invalid value, so a typo that the step would let through fails
-# here.
+# Dynamic: the 'Validate grype_dependency_ecosystems input' step of
+# build-test's gerrit-validate, the one Grype-adjacent input the
+# action does not own, is extracted and run under bash with each valid
+# and invalid value. The grype-scan-action inputs themselves are
+# checked by the action's own suite, not re-tested here.
 #
 # It then mutates a copy of build-test in each way the static check
 # must catch and expects every mutant to fail, so a check that passes
@@ -76,13 +87,35 @@ METADATA_JOB = "repository-metadata"
 DETECT_ACTION = "lfreleng-actions/dependency-change-action"
 RETIRED = ("dependency-change.json", "dependency-change-manifest")
 GRYPE_ACTION = "lfreleng-actions/grype-scan-action"
-GRYPE_PIN = "5c81b23afb2ea771b2d247807a12d90783328675"  # v0.5.0
+GRYPE_PIN = "f65dca2762823cfc8f376e32fee9baa6f3292696"  # v0.6.2
+GRYPE_TAG = "v0.6.2"
+GRYPE_USES = f"{GRYPE_ACTION}@{GRYPE_PIN}"
 CHECKOUT_ACTION = "actions/checkout"
 DOWNLOAD_ACTION = "actions/download-artifact"
 # The per-call suffix and the download's binding to the upload by ID
 # are checked in tests/test-artifact-suffix.sh.
 ARTEFACT_ID = "${{ needs.sbom.outputs.sbom_artifact_id }}"
-VALIDATE_STEP = "Validate Grype policy inputs"
+VALIDATE_JOB = "gerrit-validate"
+VALIDATE_STEP = "Validate Grype inputs"
+ECOSYSTEMS_STEP = "Validate grype_dependency_ecosystems input"
+ECOSYSTEMS_INPUT = "grype_dependency_ecosystems"
+# The scan step's inputs that only a scan has, so the validator
+# must not mirror them: the SBOM (validate-only has nothing to scan
+# and rejects one), the soft-fail switch applied after evaluation,
+# the verdict of a job that runs after this one, the report artefact
+# and the token that reads bypass issues. Everything else the scan
+# passes, the validator passes as the same expression.
+SCAN_ONLY = frozenset({
+    "sbom", "target", "permit-fail", "dependencies-changed",
+    "artifact-name", "github-token",
+})
+# testing.yaml proves the rejection end to end: a job calling the
+# workflow cannot set continue-on-error, so it runs the validation
+# step itself, with build-test's defaults and a gate-when the action
+# does not know.
+CALLER = "testing.yaml"
+CHECK_JOB = "grype-validate-check"
+GATE_WHEN_VALUES = {"always", "dependencies-changed"}
 
 DETECT_ON = (
     "${{ inputs.grype_enabled"
@@ -122,67 +155,25 @@ DETECTION_INPUTS = {
     "grype_dependency_ecosystems": "dependency_ecosystems",
     "grype_dependency_patterns": "dependency_patterns",
 }
-# Validated in gerrit-validate; the patterns are left to the detector.
-VALIDATED = {FAIL_ON, "grype_bypass_repository"} | {
-    name for name, (kind, _, _) in POLICY_INPUTS.items() if kind == "string"
-}
-VALIDATED_VERIFY = {GATE_WHEN, "grype_dependency_ecosystems"}
 
 # Every workflow_call workflow that calls grype-scan-action; 'verify'
 # ones take grype_gate_when and detect, the rest always gate.
 VERIFY = {"build-test.yaml"}
 RELEASE = {"build-test-release.yaml"}
 
-# input -> ([accepted], [rejected]) for the extracted validate step.
-CASES = {
-    FAIL_ON: (
-        ["negligible", "low", "medium", "high", "critical", "none"],
-        ["", "severe", "Medium", "medium,high", " high"],
-    ),
-    GATE_WHEN: (
-        ["always", "dependencies-changed"],
-        ["", "sometimes", "Always", "dependencies_changed"],
-    ),
-    "grype_dependency_ecosystems": (
-        [
-            "", "go", "go,node", " go , python ",
-            "node,python,go,maven,gradle,rust,docker",
-        ],
-        [
-            "golang", "Go", "go,", ",go", "go,,node", "go;node", "go node",
-            "go\nnode", "npm",
-        ],
-    ),
-    "grype_bypass_repository": (
-        ["", "lfreleng-actions/.github", "Owner_1/repo-name.x"],
-        [
-            "owner", "owner/", "/name", "owner/name/extra", "owner name/x",
-            "https://github.com/o/n", "o/n;x", "o/n\n",
-        ],
-    ),
-    "grype_dependency_policy": (
-        ["all", "declared"],
-        ["", "direct", "Declared", "all "],
-    ),
-    "grype_transitive_fail_on": (
-        ["none", "negligible", "low", "medium", "high", "critical"],
-        ["", "severe", "Critical", "critical,high"],
-    ),
-    "grype_remediation_window_days": (
-        ["", "0", "7", "30", "365"],
-        ["7d", "-1", "1.5", "seven", " 7"],
-    ),
-    "grype_remediation_window_start": (
-        ["", "2026-01-01", "2026-11-03", "2024-02-29"],
-        [
-            "2026-1-1", "20260101", "yesterday", "2026-01-01T00:00:00Z",
-            # Right shape, impossible on the calendar.
-            "2026-02-31", "2025-02-29", "2026-13-01", "2026-00-10",
-            "2026-11-31",
-        ],
-    ),
-}
-VERIFY_ONLY_CASES = {GATE_WHEN, "grype_dependency_ecosystems"}
+# ([accepted], [rejected]) for the extracted ecosystems step: the one
+# Grype-adjacent rule still written in shell, as an input of
+# repository-metadata-action rather than of grype-scan-action.
+ECOSYSTEMS_CASES = (
+    [
+        "", "go", "go,node", " go , python ",
+        "node,python,go,maven,gradle,rust,docker",
+    ],
+    [
+        "golang", "Go", "go,", ",go", "go,,node", "go;node", "go node",
+        "go\nnode", "npm",
+    ],
+)
 
 
 def triggers(doc):
@@ -207,6 +198,30 @@ def find_step(steps, action):
         if uses.split("@", 1)[0] == action:
             return index, step
     return None, None
+
+
+def steps_named(steps, name):
+    """Return every step carrying the name, so a duplicate shows."""
+    return [step for step in steps if (step or {}).get("name") == name]
+
+
+def steps_using(steps, action):
+    """Return every step using the action, so a duplicate shows."""
+    return [
+        step for step in steps
+        if str((step or {}).get("uses", "")).split("@", 1)[0] == action
+    ]
+
+
+def the_one(found, what, problems):
+    """Return the single match, or record why there is none."""
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        problems.append(f"{what} is missing")
+    else:
+        problems.append(f"{what} matches {len(found)} steps")
+    return None
 
 
 def check_input(inputs, name, kind, default, problems):
@@ -342,33 +357,112 @@ def check_retired(doc, problems):
         )
 
 
-def validate_step(doc):
-    for step in steps_of(doc, "gerrit-validate"):
-        if (step or {}).get("name") == VALIDATE_STEP:
-            return step
-    return None
+def mirrored(scan):
+    """The validator's with: block the scan step calls for."""
+    given = scan.get("with") or {}
+    return {"validate-only": "true", **{
+        key: value for key, value in given.items() if key not in SCAN_ONLY
+    }}
+
+
+def validate_step(doc, problems=None):
+    """The one validation step of gerrit-validate, or None."""
+    return the_one(
+        steps_named(steps_of(doc, VALIDATE_JOB), VALIDATE_STEP),
+        f"jobs.{VALIDATE_JOB} step '{VALIDATE_STEP}'",
+        [] if problems is None else problems,
+    )
+
+
+def ecosystems_step(doc, problems=None):
+    """The one ecosystems step of gerrit-validate, or None."""
+    return the_one(
+        steps_named(steps_of(doc, VALIDATE_JOB), ECOSYSTEMS_STEP),
+        f"jobs.{VALIDATE_JOB} step '{ECOSYSTEMS_STEP}'",
+        [] if problems is None else problems,
+    )
+
+
+def grype_inputs_read(step):
+    """The grype_* inputs a run: step reads through its env."""
+    read = set()
+    for value in (step.get("env") or {}).values():
+        read |= set(re.findall(r"inputs\.(grype_[a-z_]+)", str(value)))
+    return read
 
 
 def check_validate_step(doc, verify, problems):
-    step = validate_step(doc)
-    if step is None:
-        problems.append(f"jobs.gerrit-validate has no '{VALIDATE_STEP}' step")
+    """gerrit-validate validates through the action, as the scan does.
+
+    The validator is the action at the scan step's pin, in validate-only
+    mode, with the scan step's own expression for every input the scan
+    passes less the scan-only ones, and nothing else: so no sbom and no
+    target. The job runs no other action (no checkout, no harden-runner)
+    and no shell check of a grype-scan-action input; the ecosystems
+    preset list, an input of repository-metadata-action, keeps its shell
+    step on the verify workflows.
+    """
+    steps = steps_of(doc, VALIDATE_JOB)
+    step = validate_step(doc, problems)
+    scan = the_one(
+        steps_using(steps_of(doc, "grype"), GRYPE_ACTION),
+        f"jobs.grype step using {GRYPE_ACTION}", problems,
+    )
+    if step is None or scan is None:
         return
+    where = f"'{VALIDATE_STEP}'"
     if "if" in step:
-        problems.append(f"'{VALIDATE_STEP}' must run unconditionally")
-    env = step.get("env") or {}
-    referenced = set()
-    for value in env.values():
-        match = re.fullmatch(r"\$\{\{ inputs\.([a-z_]+) \}\}", str(value))
-        if match:
-            referenced.add(match.group(1))
-    expected = set(VALIDATED)
-    if verify:
-        expected |= VALIDATED_VERIFY
-    for name in sorted(expected - referenced):
-        problems.append(f"'{VALIDATE_STEP}' does not read {name}")
-    if not isinstance(step.get("run"), str) or not step["run"].strip():
-        problems.append(f"'{VALIDATE_STEP}' has no run script")
+        problems.append(f"{where} must run unconditionally")
+    if step.get("uses") != GRYPE_USES:
+        problems.append(f"{where} does not use {GRYPE_USES}")
+    if step.get("uses") != scan.get("uses"):
+        problems.append(f"{where} and the scan step must share one pin")
+    expected = mirrored(scan)
+    given = step.get("with") or {}
+    if given != expected:
+        for key in sorted(set(expected) | set(given)):
+            if key not in given:
+                problems.append(f"{where} does not pass {key}")
+            elif key not in expected:
+                problems.append(f"{where} must not pass {key}")
+            elif given[key] != expected[key]:
+                problems.append(
+                    f"{where} passes {key} as {given[key]!r}, the scan"
+                    f" as {expected[key]!r}"
+                )
+    for key in ("run", "env"):
+        if key in step:
+            problems.append(f"{where} must not carry {key}")
+    actions = [s.get("uses") for s in steps if (s or {}).get("uses")]
+    if actions != [GRYPE_USES]:
+        problems.append(
+            f"jobs.{VALIDATE_JOB} must run no action but the validator:"
+            f" no checkout, no harden-runner; runs {actions}"
+        )
+    allowed = {ECOSYSTEMS_INPUT} if verify else set()
+    for index, shell in enumerate(steps):
+        if not (shell or {}).get("run"):
+            continue
+        for name in sorted(grype_inputs_read(shell) - allowed):
+            problems.append(
+                f"jobs.{VALIDATE_JOB}.steps[{index}] still checks {name}"
+                " in shell"
+            )
+    if not verify:
+        if steps_named(steps, ECOSYSTEMS_STEP):
+            problems.append(f"'{ECOSYSTEMS_STEP}' is not a release step")
+        return
+    shell = ecosystems_step(doc, problems)
+    if shell is None:
+        return
+    where = f"'{ECOSYSTEMS_STEP}'"
+    if "if" in shell:
+        problems.append(f"{where} must run unconditionally")
+    if "${{ inputs.%s }}" % ECOSYSTEMS_INPUT not in \
+            (shell.get("env") or {}).values():
+        problems.append(f"{where} does not read {ECOSYSTEMS_INPUT}")
+    if not isinstance(shell.get("run"), str) or not shell["run"].strip():
+        problems.append(f"{where} has no run script")
 
 
 def check_doc(name, doc):
@@ -399,7 +493,7 @@ def check_text(path):
     text = path.read_text(encoding="utf-8")
     problems = []
     for action, pin, tag in (
-        (GRYPE_ACTION, GRYPE_PIN, "v0.5.0"),
+        (GRYPE_ACTION, GRYPE_PIN, GRYPE_TAG),
         (METADATA_ACTION, METADATA_PIN, METADATA_TAG),
     ):
         for line in re.findall(
@@ -418,16 +512,93 @@ def check_text(path):
     return problems
 
 
-def run_validate(doc, overrides):
-    """Run the extracted validate step; return its exit code."""
-    step = validate_step(doc)
-    inputs = inputs_of(doc)
+def input_default(doc, name):
+    """A workflow input's default as the action receives it."""
+    value = inputs_of(doc)[name].get("default", "")
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+def check_caller(caller, verify_doc):
+    """testing.yaml's check job rejects a bad gate-when at the pin.
+
+    The job runs the validation step itself, since a job calling the
+    workflow cannot set continue-on-error: the same with: keys as
+    build-test's validator, each with build-test's default, but a
+    gate-when the action does not know, and asserts the step failed.
+    """
+    problems = []
+    job = (caller.get("jobs") or {}).get(CHECK_JOB)
+    if not isinstance(job, dict):
+        return [f"jobs.{CHECK_JOB} is missing"]
+    steps = list(job.get("steps") or [])
+    step = the_one(
+        steps_named(steps, VALIDATE_STEP),
+        f"jobs.{CHECK_JOB} step '{VALIDATE_STEP}'", problems,
+    )
+    validator = validate_step(verify_doc, problems)
+    scan = the_one(
+        steps_using(steps_of(verify_doc, "grype"), GRYPE_ACTION),
+        f"jobs.grype step using {GRYPE_ACTION}", problems,
+    )
+    if step is None or validator is None or scan is None:
+        return problems
+    where = f"jobs.{CHECK_JOB} '{VALIDATE_STEP}'"
+    if step.get("uses") != GRYPE_USES:
+        problems.append(f"{where} does not use {GRYPE_USES}")
+    if step.get("continue-on-error") is not True:
+        problems.append(f"{where} must set continue-on-error: true")
+    given = step.get("with") or {}
+    expected = {}
+    for key, expression in mirrored(scan).items():
+        match = re.fullmatch(
+            r"\$\{\{ inputs\.([a-z_]+) \}\}", str(expression),
+        )
+        expected[key] = (
+            input_default(verify_doc, match.group(1)) if match
+            else expression
+        )
+    expected["validate-only"] = "true"
+    expected["gate-when"] = None
+    if set(given) != set(expected):
+        problems.append(
+            f"{where} passes {sorted(given)}; build-test's validator"
+            f" passes {sorted(expected)}"
+        )
+    for key, value in expected.items():
+        if key == "gate-when":
+            if given.get(key) in GATE_WHEN_VALUES | {None}:
+                problems.append(
+                    f"{where} must pass a gate-when the action rejects"
+                )
+        elif key in given and given[key] != value:
+            problems.append(
+                f"{where} passes {key} as {given[key]!r}, build-test's"
+                f" default is {value!r}"
+            )
+    step_id = step.get("id")
+    index = steps.index(step)
+    assertion = [
+        s for s in steps[index + 1:]
+        if step_id and f"steps.{step_id}.outcome" in yaml.safe_dump(s)
+    ]
+    if not assertion:
+        problems.append(f"{where} has no later step reading its outcome")
+    actions = [s.get("uses") for s in steps if (s or {}).get("uses")]
+    if actions != [GRYPE_USES]:
+        problems.append(
+            f"jobs.{CHECK_JOB} must run no action but the validator;"
+            f" runs {actions}"
+        )
+    return problems
+
+
+def run_ecosystems(doc, value):
+    """Run the extracted ecosystems step; return (exit code, output)."""
+    step = ecosystems_step(doc)
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-    for var, value in (step.get("env") or {}).items():
-        match = re.fullmatch(r"\$\{\{ inputs\.([a-z_]+) \}\}", str(value))
-        name = match.group(1)
-        default = inputs[name].get("default", "")
-        env[var] = str(overrides.get(name, default))
+    for var, expression in (step.get("env") or {}).items():
+        if expression == "${{ inputs.%s }}" % ECOSYSTEMS_INPUT:
+            env[var] = value
     result = subprocess.run(
         ["bash", "-c", step["run"]],
         env=env, capture_output=True, text=True, check=False,
@@ -435,41 +606,31 @@ def run_validate(doc, overrides):
     return result.returncode, result.stdout + result.stderr
 
 
-def exercise_validation(name, doc):
-    """Return the number of cases the validate step got wrong."""
-    verify = name in VERIFY
+def exercise_ecosystems(name, doc):
+    """Return the number of values the ecosystems step got wrong."""
     wrong = 0
-    total = 0
-    code, output = run_validate(doc, {})
-    total += 1
-    if code != 0:
-        wrong += 1
-        print(f"::error file={name}::defaults rejected: {output.strip()}")
-    for input_name, (accepted, rejected) in CASES.items():
-        if input_name in VERIFY_ONLY_CASES and not verify:
-            continue
-        for value in accepted:
-            total += 1
-            code, output = run_validate(doc, {input_name: value})
-            if code != 0:
-                wrong += 1
-                print(
-                    f"::error file={name}::{input_name}={value!r} rejected:"
-                    f" {output.strip()}"
-                )
-        for value in rejected:
-            total += 1
-            code, output = run_validate(doc, {input_name: value})
-            if code == 0:
-                wrong += 1
-                print(f"::error file={name}::{input_name}={value!r} accepted")
-            elif f"Invalid {input_name} input" not in output:
-                wrong += 1
-                print(
-                    f"::error file={name}::{input_name}={value!r} rejected"
-                    f" without naming the input: {output.strip()}"
-                )
-    print(f"{name}: validate step right on {total - wrong}/{total} values")
+    accepted, rejected = ECOSYSTEMS_CASES
+    for value in accepted:
+        code, output = run_ecosystems(doc, value)
+        if code != 0:
+            wrong += 1
+            print(
+                f"::error file={name}::{ECOSYSTEMS_INPUT}={value!r}"
+                f" rejected: {output.strip()}"
+            )
+    for value in rejected:
+        code, output = run_ecosystems(doc, value)
+        if code == 0:
+            wrong += 1
+            print(f"::error file={name}::{ECOSYSTEMS_INPUT}={value!r} accepted")
+        elif f"Invalid {ECOSYSTEMS_INPUT} input" not in output:
+            wrong += 1
+            print(
+                f"::error file={name}::{ECOSYSTEMS_INPUT}={value!r} rejected"
+                f" without naming the input: {output.strip()}"
+            )
+    total = len(accepted) + len(rejected)
+    print(f"{name}: ecosystems step right on {total - wrong}/{total} values")
     return wrong
 
 
@@ -569,20 +730,141 @@ def mutants(doc):
         d = copy.deepcopy(doc)
         del d[on_key]["workflow_call"]["outputs"][output]
         yield f"workflow drops {output}", d
-    for name in sorted(VALIDATED | VALIDATED_VERIFY):
+    # The validator: its pin, its mode, and its mirror of the scan.
+    d = copy.deepcopy(doc)
+    validate_step(d)["uses"] = f"{GRYPE_ACTION}@{'0' * 40}"
+    yield "validator pinned elsewhere", d
+    d = copy.deepcopy(doc)
+    grype(d)["uses"] = f"{GRYPE_ACTION}@{'0' * 40}"
+    yield "scan pinned elsewhere", d
+    d = copy.deepcopy(doc)
+    for s in (validate_step(d), grype(d)):
+        s["uses"] = f"{GRYPE_ACTION}@{'0' * 40}"
+    yield "validator and scan pinned elsewhere together", d
+    d = copy.deepcopy(doc)
+    del validate_step(d)["with"]["validate-only"]
+    yield "validator drops validate-only", d
+    d = copy.deepcopy(doc)
+    validate_step(d)["with"]["validate-only"] = True
+    yield "validator passes validate-only as a YAML boolean", d
+    d = copy.deepcopy(doc)
+    validate_step(d)["with"]["validate-only"] = "false"
+    yield "validator passes validate-only false", d
+    for key in sorted(set(mirrored(grype(doc))) - {"validate-only"}):
         d = copy.deepcopy(doc)
-        validate = validate_step(d)
-        validate["env"].pop(
-            next(k for k, v in validate["env"].items()
-                 if v == "${{ inputs.%s }}" % name)
-        )
-        yield f"validate step ignores {name}", d
+        del validate_step(d)["with"][key]
+        yield f"validator drops {key}", d
+        d = copy.deepcopy(doc)
+        validate_step(d)["with"][key] = "${{ inputs.grype_enabled }}"
+        yield f"validator passes {key} as another expression", d
+        d = copy.deepcopy(doc)
+        validate_step(d)["with"][key] = str(grype(doc)["with"][key]) + " "
+        yield f"validator passes {key} with trailing whitespace", d
+    d = copy.deepcopy(doc)
+    grype(d)["with"]["cache-db"] = "restore-only"
+    yield "scan gains an input the validator lacks", d
+    d = copy.deepcopy(doc)
+    grype(d)["with"]["fail-on"] = "${{ inputs.grype_transitive_fail_on }}"
+    yield "scan changes an expression the validator keeps", d
+    for key, value in (
+        ("sbom", "sbom-cyclonedx.json"),
+        ("target", "dir:."),
+        ("permit-fail", grype(doc)["with"]["permit-fail"]),
+        ("github-token", "${{ secrets.GITHUB_TOKEN }}"),
+    ):
+        d = copy.deepcopy(doc)
+        validate_step(d)["with"][key] = value
+        yield f"validator passes {key}", d
     d = copy.deepcopy(doc)
     validate_step(d)["if"] = "inputs.grype_enabled"
-    yield "validate step conditional", d
+    yield "validator conditional", d
     d = copy.deepcopy(doc)
-    d["jobs"]["gerrit-validate"]["steps"].remove(validate_step(d))
-    yield "validate step missing", d
+    d["jobs"][VALIDATE_JOB]["steps"].remove(validate_step(d))
+    yield "validator missing", d
+    d = copy.deepcopy(doc)
+    d["jobs"][VALIDATE_JOB]["steps"].append(
+        copy.deepcopy(validate_step(d))
+    )
+    yield "validator duplicated", d
+    d = copy.deepcopy(doc)
+    d["jobs"]["grype"]["steps"].append(copy.deepcopy(grype(d)))
+    yield "scan step duplicated", d
+    # The job's shape: the validator alone, no checkout, no
+    # harden-runner, and no shell check of a Grype input.
+    d = copy.deepcopy(doc)
+    d["jobs"][VALIDATE_JOB]["steps"].insert(0, {
+        "name": "Checkout", "uses": f"{CHECKOUT_ACTION}@{'0' * 40}",
+    })
+    yield "validation job checks out", d
+    d = copy.deepcopy(doc)
+    d["jobs"][VALIDATE_JOB]["steps"].insert(0, {
+        "name": "Harden runner",
+        "uses": f"step-security/harden-runner@{'0' * 40}",
+    })
+    yield "validation job hardens the runner", d
+    d = copy.deepcopy(doc)
+    d["jobs"][VALIDATE_JOB]["steps"].append({
+        "name": "Validate grype_fail_on input",
+        "shell": "bash",
+        "env": {"GRYPE_FAIL_ON": "${{ inputs.grype_fail_on }}"},
+        "run": "test -n \"${GRYPE_FAIL_ON}\"",
+    })
+    yield "shell check of a Grype input returns", d
+    d = copy.deepcopy(doc)
+    ecosystems_step(d)["env"]["GRYPE_FAIL_ON"] = "${{ inputs.grype_fail_on }}"
+    yield "ecosystems step reads a Grype input", d
+    # The ecosystems step, the one shell check kept.
+    d = copy.deepcopy(doc)
+    ecosystems_step(d)["env"] = {"ECOSYSTEMS": "go"}
+    yield "ecosystems step ignores the input", d
+    d = copy.deepcopy(doc)
+    ecosystems_step(d)["if"] = "inputs.grype_enabled"
+    yield "ecosystems step conditional", d
+    d = copy.deepcopy(doc)
+    d["jobs"][VALIDATE_JOB]["steps"].remove(ecosystems_step(d))
+    yield "ecosystems step missing", d
+
+
+def caller_mutants(caller):
+    """Yield (label, mutated caller) for each drift check_caller must catch."""
+    def step(d):
+        return steps_named(d["jobs"][CHECK_JOB]["steps"], VALIDATE_STEP)[0]
+
+    d = copy.deepcopy(caller)
+    del d["jobs"][CHECK_JOB]
+    yield "check job missing", d
+    d = copy.deepcopy(caller)
+    step(d)["uses"] = f"{GRYPE_ACTION}@{'0' * 40}"
+    yield "check job pinned elsewhere", d
+    d = copy.deepcopy(caller)
+    del step(d)["continue-on-error"]
+    yield "check job would fail on the rejection", d
+    d = copy.deepcopy(caller)
+    step(d)["with"]["gate-when"] = "always"
+    yield "check job passes a gate-when the action accepts", d
+    d = copy.deepcopy(caller)
+    del step(d)["with"]["gate-when"]
+    yield "check job passes no gate-when", d
+    d = copy.deepcopy(caller)
+    step(d)["with"]["validate-only"] = "false"
+    yield "check job scans for real", d
+    d = copy.deepcopy(caller)
+    step(d)["with"]["fail-on"] = "high"
+    yield "check job departs from build-test's default", d
+    d = copy.deepcopy(caller)
+    del step(d)["with"]["bypass-repository"]
+    yield "check job drops an input the validator passes", d
+    d = copy.deepcopy(caller)
+    step(d)["with"]["sbom"] = "sbom-cyclonedx.json"
+    yield "check job passes an sbom", d
+    d = copy.deepcopy(caller)
+    step(d)["id"] = "renamed"
+    yield "check job's assertion reads another step", d
+    d = copy.deepcopy(caller)
+    d["jobs"][CHECK_JOB]["steps"].insert(0, {
+        "name": "Checkout", "uses": f"{CHECKOUT_ACTION}@{'0' * 40}",
+    })
+    yield "check job checks out", d
 
 
 def self_test(name, doc):
@@ -606,27 +888,41 @@ for workflow in sorted(root.glob("*.y*ml")):
     # The single pin covers every workflow that calls the action.
     problems = [p for p in check_text(workflow)
                 if workflow.name in VERIFY | RELEASE or METADATA_ACTION in p]
-    if workflow.name in VERIFY | RELEASE:
+    if workflow.name in VERIFY | RELEASE | {CALLER}:
         doc = yaml.safe_load(workflow.read_text(encoding="utf-8"))
         docs[workflow.name] = doc
+    if workflow.name in VERIFY | RELEASE:
         problems += check_doc(workflow.name, doc)
     for problem in problems:
         failures += 1
         print(f"::error file={workflow}::{problem}")
-missing = (VERIFY | RELEASE) - set(docs)
+missing = (VERIFY | RELEASE | {CALLER}) - set(docs)
 if missing:
     print(f"::error::workflows not found in {root}: {sorted(missing)}")
     sys.exit(1)
+verify_doc = docs[sorted(VERIFY)[0]]
+for problem in check_caller(docs[CALLER], verify_doc):
+    failures += 1
+    print(f"::error file={root / CALLER}::{problem}")
 if failures:
     print(f"{failures} problem(s) across {len(docs)} workflow(s) ❌")
     sys.exit(1)
 print(f"{len(docs)} workflow(s) wire the Grype gating inputs ✅")
-for name, doc in docs.items():
-    failures += exercise_validation(name, doc)
+for name in sorted(VERIFY):
+    failures += exercise_ecosystems(name, docs[name])
 if failures:
     sys.exit(1)
 for name in sorted(VERIFY):
     failures += self_test(name, docs[name])
+escaped = 0
+total = 0
+for label, mutant in caller_mutants(docs[CALLER]):
+    total += 1
+    if not check_caller(yaml.safe_load(yaml.safe_dump(mutant)), verify_doc):
+        escaped += 1
+        print(f"::error::caller mutant not caught: {label}")
+print(f"Mutants of {CALLER} caught: {total - escaped}/{total}")
+failures += escaped
 if failures:
     sys.exit(1)
 PYEOF
