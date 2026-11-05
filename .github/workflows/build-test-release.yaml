@@ -1383,7 +1383,10 @@ jobs:
       # The grype job downloads by this ID, never by name: a caller
       # running this workflow twice in one run without a distinct
       # artifact_suffix uploads under one name, and a name lookup can
-      # hand that job the other call's SBOM.
+      # hand that job the other call's SBOM. The ID lookup never does,
+      # but download-artifact only resolves an ID among the newest
+      # artefact of each name, so the earlier call's download fails
+      # instead; a distinct suffix per call avoids it.
       sbom_artifact_id: ${{ steps.sbom-upload.outputs.artifact-id }}
     steps:
       - name: 'Load egress allow-list'
@@ -1518,7 +1521,10 @@ jobs:
 
       # Bound to the sbom job's own upload by ID rather than by name,
       # so a same-named artefact from another call of this workflow in
-      # the same run can never be the one scanned here.
+      # the same run can never be the one scanned here. download-artifact
+      # resolves an ID among the newest artefact of each name, so when a
+      # later call in the run reused this call's artefact name the step
+      # fails rather than reading the other call's SBOM.
       - name: 'Download SBOM artefact'
         id: sbom-download
         # yamllint disable-line rule:line-length
@@ -1534,8 +1540,10 @@ jobs:
         run: |
           # Explain SBOM download failure
           echo "::error::Could not download SBOM artefact" \
-            "${SBOM_ARTIFACT_ID} uploaded by the sbom job; it may have" \
-            "expired or been deleted since that job ran"
+            "${SBOM_ARTIFACT_ID} uploaded by the sbom job. Another call" \
+            "of this workflow in the same run may have uploaded an SBOM" \
+            "under the same name (give each call a distinct" \
+            "artifact_suffix), or the artefact expired or was deleted"
 
       # Setting the grype_permit_fail input, or the NO_BLOCK_AUDIT_FAIL
       # repository variable (an org/repo-wide override that soft-fails
