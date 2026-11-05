@@ -16,9 +16,11 @@
 #     lane must gate like the unresolved one.
 #
 # This workflow runs apart from testing.yaml so its artefacts stay out
-# of that run, and each lane sets its own artifact_suffix because
-# upload-artifact rejects a second artefact of a name already uploaded
-# in a run.
+# of that run, and each lane sets its own artifact_suffix so the two
+# calls upload under distinct names. Without it both lanes would upload
+# under one name, and download-artifact resolves each grype job's SBOM
+# ID among the newest artefact of each name, so the lane that uploaded
+# first could fail its SBOM download.
 #
 # The reusable workflow is referenced with the self-repository form
 # ('$/'), so the workflow under test is the one this branch defines.

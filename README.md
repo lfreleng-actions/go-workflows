@@ -550,12 +550,17 @@ dependency file never arms its gate, while one that does arms it
 against whatever the scan finds.
 
 The `testing.yaml` legs call build-test in one run, so each passes its
-matrix name as `artifact_suffix`. Without it the legs share the
-`sbom-files` name and `upload-artifact` rejects the second upload. The
-`grype` job does not rely on the name either way: the `sbom` job
-exports its upload's `artifact-id` as the `sbom_artifact_id` output
-and `grype` downloads by `artifact-ids`, so a same-named artefact from
+matrix name as `artifact_suffix`. Without it every leg uploads under
+the same `sbom-files` name, and the run holds one such artefact per
+leg. The `grype` job does not rely on the name: the `sbom` job exports
+its upload's `artifact-id` as the `sbom_artifact_id` output and
+`grype` downloads by `artifact-ids`, so a same-named artefact from
 another call of the workflow in the same run is never the one scanned.
+`download-artifact` resolves an ID among the newest artefact of each
+name, though, so a call whose artefact name a later call reused fails
+its download instead, and the `grype` job's `Explain SBOM download
+failure` step says so; the fix is a distinct `artifact_suffix` per
+call.
 
 Each leg also passes the [egress allow-list](#egress-allow-list)
 inputs in a form that grants nothing new: `lfreleng-actions//`

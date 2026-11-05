@@ -100,9 +100,10 @@ jobs:
       staticcheck: ${{ matrix.staticcheck }}
       lint_permit_fail: ${{ matrix.lint_permit_fail }}
       # Each leg calls build-test in the same run; without a distinct
-      # suffix the legs share artefact names and upload-artifact
-      # rejects the second upload of a name. The Grype job binds to
-      # its own SBOM by artefact ID regardless.
+      # suffix the legs upload under shared artefact names. The Grype
+      # job downloads its own SBOM by artefact ID, but download-artifact
+      # resolves an ID among the newest artefact of each name, so a leg
+      # whose name a later leg reused would fail that download.
       artifact_suffix: ${{ matrix.name }}
       # Exercise the allow-list inputs without granting anything new.
       # A same-organisation list may follow its default branch, and

@@ -7,7 +7,11 @@
 # more than once in one run (a matrix) gets distinct names, and that
 # each grype job downloads the SBOM its own sbom job uploaded, by
 # artefact ID, so no call scans another call's SBOM even when the
-# suffix is omitted and the names collide.
+# suffix is omitted and the names collide. Such a call does not get
+# its own SBOM either: download-artifact resolves an ID among the
+# newest artefact of each name, so a call whose name a later call
+# reused fails its download; only a distinct suffix lets every call
+# pass.
 #
 # Static, from the parsed YAML:
 #   - both reusable workflows take artifact_suffix (string, default
