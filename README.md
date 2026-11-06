@@ -575,11 +575,6 @@ inputs in a form that grants nothing new: `lfreleng-actions//`
 unpinned resolves to the organisation list the baseline already loads,
 and `github.com:443` already sits on that list.
 
-`bash tests/test-harden-runner-inputs.sh` checks that both reusable
-workflows expose the five `harden_runner_*` inputs and pass each one
-through to every block-action step; a prek hook runs it on every
-workflow change.
-
 `bash tests/test-grype-gating.sh` checks the Grype gating wiring: the
 inputs and their defaults in both workflows, the pinned detection step
 in the `repository-metadata` job and the job output carrying its
