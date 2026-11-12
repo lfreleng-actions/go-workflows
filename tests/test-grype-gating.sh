@@ -10,7 +10,7 @@
 #     inputs and the release workflow the ones it takes (a release
 #     always gates and detects nothing), each with the agreed type and
 #     default;
-#   - every workflow pins repository-metadata-action at v0.5.1, and in
+#   - every workflow pins repository-metadata-action at v0.5.4, and in
 #     build-test its step detects only when grype_gate_when is
 #     'dependencies-changed', with the refspec, presets, patterns and
 #     path prefix passed through, and its job exports the verdict as
@@ -79,8 +79,8 @@ import sys
 import yaml
 
 METADATA_ACTION = "lfreleng-actions/repository-metadata-action"
-METADATA_PIN = "f0e5d2d8dc1154a5d702b75acc551eff6ba072dc"  # v0.5.1
-METADATA_TAG = "v0.5.1"
+METADATA_PIN = "ff822d06a64404a54feb79f8e27b687cc76d1c83"  # v0.5.4
+METADATA_TAG = "v0.5.4"
 METADATA_JOB = "repository-metadata"
 # Detection moved into repository-metadata-action; no workflow may
 # call the detector itself or carry its sidecar any more.
