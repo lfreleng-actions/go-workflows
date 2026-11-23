@@ -10,8 +10,9 @@
 #     inputs and the release workflow the ones it takes (a release
 #     always gates and detects nothing), each with the agreed type and
 #     default;
-#   - every workflow pins repository-metadata-action at v0.5.4, and in
-#     build-test its step detects only when grype_gate_when is
+#   - every workflow pins repository-metadata-action to one shared
+#     commit SHA with its version comment, and in build-test its step
+#     detects only when grype_gate_when is
 #     'dependencies-changed', with the refspec, presets, patterns and
 #     path prefix passed through, and its job exports the verdict as
 #     dependencies_changed;
@@ -79,8 +80,9 @@ import sys
 import yaml
 
 METADATA_ACTION = "lfreleng-actions/repository-metadata-action"
-METADATA_PIN = "ff822d06a64404a54feb79f8e27b687cc76d1c83"  # v0.5.4
-METADATA_TAG = "v0.5.4"
+# No pin is hardcoded, so a Dependabot bump passes; every call must
+# pin a full commit SHA, and every workflow the same SHA and tag.
+COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 METADATA_JOB = "repository-metadata"
 # Detection moved into repository-metadata-action; no workflow may
 # call the detector itself or carry its sidecar any more.
@@ -243,9 +245,9 @@ def check_metadata(doc, verify, problems):
         problems.append(f"jobs.{METADATA_JOB} does not call {METADATA_ACTION}")
         return
     where = f"jobs.{METADATA_JOB}.steps[{index}]"
-    if step["uses"].partition("@")[2] != METADATA_PIN:
+    if not COMMIT_SHA.fullmatch(str(step["uses"]).partition("@")[2]):
         problems.append(
-            f"{where} does not pin {METADATA_ACTION}@{METADATA_PIN}"
+            f"{where} does not pin {METADATA_ACTION} to a full commit SHA"
         )
     given = step.get("with") or {}
     if not verify:
@@ -488,28 +490,111 @@ def check_doc(name, doc):
     return problems
 
 
-def check_text(path):
-    """Checks on the raw file: pins and their comments, retired words."""
-    text = path.read_text(encoding="utf-8")
+def check_text(name, text):
+    """Checks on the raw text: the Grype pin and its comment, retired words."""
     problems = []
-    for action, pin, tag in (
-        (GRYPE_ACTION, GRYPE_PIN, GRYPE_TAG),
-        (METADATA_ACTION, METADATA_PIN, METADATA_TAG),
+    for line in re.findall(
+        r"uses:\s+%s@\S+.*" % re.escape(GRYPE_ACTION), text,
     ):
-        for line in re.findall(
-            r"uses:\s+%s@\S+.*" % re.escape(action), text,
+        if not re.fullmatch(
+            r"uses:\s+%s@%s\s+#\s+%s\b.*"
+            % (re.escape(GRYPE_ACTION), re.escape(GRYPE_PIN),
+               re.escape(GRYPE_TAG)),
+            line,
         ):
-            if not re.fullmatch(
-                r"uses:\s+%s@%s\s+#\s+%s\b.*"
-                % (re.escape(action), re.escape(pin), re.escape(tag)),
-                line,
-            ):
-                problems.append(f"'{line.strip()}' is not {action}@{pin}"
-                                f" # {tag}")
+            problems.append(f"'{line.strip()}' is not {GRYPE_ACTION}"
+                            f"@{GRYPE_PIN} # {GRYPE_TAG}")
     for word in RETIRED:
         if word in text:
-            problems.append(f"{word} still appears in {path.name}")
+            problems.append(f"{word} still appears in {name}")
     return problems
+
+
+def metadata_nodes(text):
+    """Return the 'uses' value node of each metadata action call.
+
+    The calls are read from the composed YAML, so a comment or a run:
+    script that mentions the action is never taken for one. An alias
+    is one call.
+    """
+    nodes = []
+    seen = set()
+
+    def walk(node):
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                walk(item)
+        elif isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                if (isinstance(key, yaml.ScalarNode) and key.value == "uses"
+                        and isinstance(value, yaml.ScalarNode)
+                        and value.value.strip().startswith(
+                            f"{METADATA_ACTION}@")):
+                    nodes.append(value)
+                walk(key)
+                walk(value)
+
+    root = yaml.compose(text)
+    if root is not None:
+        walk(root)
+    return nodes
+
+
+def metadata_pins(text):
+    """Check each metadata action call at its own YAML source line.
+
+    Each call from metadata_nodes must sit on a plain
+    'uses: <action>@<sha>  # vX.Y.Z' line: a quoted or block scalar,
+    or one broken across lines, fails here rather than drop out of the
+    shared pin.
+
+    Return the problems and the (line, sha, tag) of each well-formed
+    call, for check_shared_pin.
+    """
+    lines = text.splitlines()
+    plain = re.compile(
+        r"[ \t]*(?:-[ \t]+)?uses:[ \t]+%s@([0-9a-f]{40})[ \t]+#[ \t]+"
+        r"(v\d+\.\d+\.\d+)(?:[ \t].*)?" % re.escape(METADATA_ACTION)
+    )
+    problems = []
+    pins = []
+    for node in metadata_nodes(text):
+        start, end = node.start_mark, node.end_mark
+        source = lines[start.line] if start.line < len(lines) else ""
+        match = None
+        if node.style is None and start.line == end.line:
+            match = plain.fullmatch(source)
+        if match is None or (
+                match.start(1) != start.column + len(METADATA_ACTION) + 1):
+            problems.append(
+                f"line {start.line + 1} '{source.strip()}' does not pin"
+                f" {METADATA_ACTION} to a full commit SHA with a"
+                " '# vX.Y.Z' comment on a plain 'uses:' line"
+            )
+        else:
+            pins.append((source.strip(), match.group(1), match.group(2)))
+    return problems, pins
+
+
+def check_shared_pin(pins):
+    """Every metadata action call, in every workflow, pins one pair.
+
+    pins maps a workflow name to its (line, sha, tag) calls. Return
+    (workflow name, problem) for every call site when the workflows pin
+    more than one (sha, tag) pair, so the lagging one shows.
+    """
+    used = {(sha, tag) for calls in pins.values() for _, sha, tag in calls}
+    if len(used) <= 1:
+        return []
+    return [
+        (name, f"'{line}': the workflows use {len(used)} different"
+               f" pins of {METADATA_ACTION}, not one")
+        for name, calls in sorted(pins.items())
+        for line, _, _ in calls
+    ]
 
 
 def input_default(doc, name):
@@ -670,9 +755,15 @@ def mutants(doc):
     d = copy.deepcopy(doc)
     inputs(d)["grype_dependency_ecosystems"]["default"] = "go"
     yield "ecosystems narrowed by default", d
+    # A pin that differs from the other workflows' is the cross-workflow
+    # rule's to catch; see shared_pin_self_test.
     d = copy.deepcopy(doc)
-    metadata(d)["uses"] = f"{METADATA_ACTION}@{'0' * 40}"
-    yield "metadata action pinned elsewhere", d
+    metadata(d)["uses"] = f"{METADATA_ACTION}@v0.5.5"
+    yield "metadata action pinned to a tag", d
+    d = copy.deepcopy(doc)
+    sha = str(metadata(doc)["uses"]).partition("@")[2]
+    metadata(d)["uses"] = f"{METADATA_ACTION}@{sha[:7]}"
+    yield "metadata action pinned to a short SHA", d
     d = copy.deepcopy(doc)
     metadata(d)["with"]["dependency_change"] = "true"
     yield "detection runs on always", d
@@ -881,21 +972,128 @@ def self_test(name, doc):
     return escaped
 
 
+def shared_pin_self_test(name, text):
+    """Expect a second workflow pinning another pair to fail the rule."""
+    _, clean = metadata_pins(text)
+    if not clean:
+        print(f"::error::{name} has no well-formed {METADATA_ACTION} pin")
+        return 1
+    sha, tag = clean[0][1], clean[0][2]
+    other = "1" * 40 if sha == "0" * 40 else "0" * 40
+    other_tag = "v0.0.1" if tag == "v0.0.0" else "v0.0.0"
+    copies = {
+        "re-pinned to another SHA": text.replace(f"@{sha}", f"@{other}"),
+        "re-tagged at the same SHA": re.sub(
+            r"(@%s\s+#\s+)%s\b" % (sha, re.escape(tag)),
+            lambda m: m.group(1) + other_tag, text,
+        ),
+    }
+    # Only the source lines of the metadata calls are rewritten below,
+    # so a run: script that mentions the reference, even on a 'uses:'
+    # line of its own, keeps parsing.
+    line = re.compile(
+        r"([ \t]*)(-[ \t]+)?uses:[ \t]+%s@%s(.*)"
+        % (re.escape(METADATA_ACTION), sha),
+    )
+    call_lines = {node.start_mark.line for node in metadata_nodes(text)}
+
+    def on_calls(sub):
+        lines = text.split("\n")
+        for i in call_lines:
+            match = line.fullmatch(lines[i])
+            if match:
+                lines[i] = sub(match)
+        return "\n".join(lines)
+
+    # A quoted reference must fail the format check, not drop out of
+    # the shared pin unseen.
+    quoted = {
+        f"quoted with {q} and re-pinned to another SHA": on_calls(
+            lambda m, q=q: (f"{m.group(1)}{m.group(2) or ''}uses: "
+                            f"{q}{METADATA_ACTION}@{other}{q}{m.group(3)}"),
+        )
+        for q in ("'", '"')
+    }
+    # Nor may a reference that spans lines: a block scalar, or a
+    # double-quoted one broken across lines. A step may open with
+    # '- uses:', so the list marker is kept and the continuation is
+    # indented past it. A commented-out pin line beside such a call
+    # must not stand in for it.
+    owner, _, repo = METADATA_ACTION.partition("/")
+
+    def spanning(first, rest, comment=False):
+        def sub(m):
+            lead, marker = m.group(1), m.group(2) or ""
+            indent = lead + " " * len(marker) + "  "
+            out = f"{lead}{marker}uses: {first}\n{indent}{rest}"
+            if comment:
+                out = (f"{lead}# uses: {METADATA_ACTION}@{sha}  # {tag}\n"
+                       + out)
+            return out
+        return on_calls(sub)
+
+    quoted.update({
+        "a block scalar re-pinned to another SHA": spanning(
+            ">-", f"{METADATA_ACTION}@{other}",
+        ),
+        "split across lines and re-pinned to another SHA": spanning(
+            f'"{owner}/\\', f'{repo}@{other}"',
+        ),
+        "a block scalar beside a commented-out pin line": spanning(
+            ">-", f"{METADATA_ACTION}@{sha}", comment=True,
+        ),
+        # A suffix would otherwise be cut from the tag the rule compares.
+        "a version comment with a suffix": re.sub(
+            r"(@%s\s+#\s+%s)\b" % (sha, re.escape(tag)),
+            lambda m: m.group(1) + "-rc.1", text,
+        ),
+    })
+    escaped = 0
+    for label, mutated in copies.items():
+        _, mutated_pins = metadata_pins(mutated)
+        found = check_shared_pin(
+            {name: clean, f"copy-of-{name}": mutated_pins},
+        )
+        if not mutated_pins or not found:
+            escaped += 1
+            print(f"::error::shared pin mutant not caught: {label}")
+    for label, mutated in quoted.items():
+        problems, _ = metadata_pins(mutated)
+        if mutated == text or not problems:
+            escaped += 1
+            print(f"::error::shared pin mutant not caught: {label}")
+    total = len(copies) + len(quoted)
+    print(f"Shared pin mutants of {name} caught: {total - escaped}/{total}")
+    return escaped
+
+
 root = pathlib.Path(sys.argv[1])
 failures = 0
 docs = {}
+texts = {}
+pins = {}
 for workflow in sorted(root.glob("*.y*ml")):
-    # The single pin covers every workflow that calls the action.
-    problems = [p for p in check_text(workflow)
-                if workflow.name in VERIFY | RELEASE or METADATA_ACTION in p]
+    text = workflow.read_text(encoding="utf-8")
+    problems = check_text(workflow.name, text)
+    doc = yaml.safe_load(text)
+    # The shared pin covers every workflow that calls the action.
+    if workflow.name not in VERIFY | RELEASE:
+        problems = []
+    pin_problems, calls = metadata_pins(text)
+    problems += pin_problems
+    if calls:
+        pins[workflow.name] = calls
     if workflow.name in VERIFY | RELEASE | {CALLER}:
-        doc = yaml.safe_load(workflow.read_text(encoding="utf-8"))
         docs[workflow.name] = doc
+        texts[workflow.name] = text
     if workflow.name in VERIFY | RELEASE:
         problems += check_doc(workflow.name, doc)
     for problem in problems:
         failures += 1
         print(f"::error file={workflow}::{problem}")
+for name, problem in check_shared_pin(pins):
+    failures += 1
+    print(f"::error file={root / name}::{problem}")
 missing = (VERIFY | RELEASE | {CALLER}) - set(docs)
 if missing:
     print(f"::error::workflows not found in {root}: {sorted(missing)}")
@@ -914,6 +1112,7 @@ if failures:
     sys.exit(1)
 for name in sorted(VERIFY):
     failures += self_test(name, docs[name])
+    failures += shared_pin_self_test(name, texts[name])
 escaped = 0
 total = 0
 for label, mutant in caller_mutants(docs[CALLER]):
