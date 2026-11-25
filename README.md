@@ -589,7 +589,10 @@ step, the one Grype-adjacent rule the action does not own, runs with
 each valid and invalid value. The script also holds `testing.yaml`'s
 `grype-validate-check` job to the same pin and defaults; that job runs
 the validation with a `gate-when` the action rejects and asserts the
-failure. A prek hook and a `testing.yaml` job both run the script.
+failure. For each of `repository-metadata-action` and `grype-scan-action`,
+all workflow calls must share a full commit SHA and version comment.
+The Grype version floor guards its input-checking mode.
+A prek hook and a `testing.yaml` job both run the script.
 
 `bash tests/test-artifact-suffix.sh` checks that both reusable
 workflows take `artifact_suffix`, append it at every upload and
